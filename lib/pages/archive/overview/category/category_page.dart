@@ -1,8 +1,7 @@
-import '../../../../services/archive/sort_settings.dart';
-import '../../../../services/guarded.dart';
 import '../../../../services/localization/l10n.dart';
 
 import 'dart:async';
+import 'dart:io' as io;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -12,7 +11,6 @@ import '../../../../theme/theme.dart';
 import '../../../../components/notification.dart';
 import '../../../../components/dialogs/connection.dart';
 import '../controller.dart';
-import '../rename_key.dart';
 import '../../../../components/archive/category.dart';
 import '../../../../components/archive/models/key.dart';
 import '../../widgets/actions_sheet.dart';
@@ -23,25 +21,16 @@ import '../../../../components/filelist/columns.dart';
 import 'sort.dart';
 import '../../../../components/filelist/table.dart';
 import '../../../../components/filelist/toolbar.dart';
-import '../failure_toast.dart';
-import 'bulk_save.dart';
-import '../../widgets/drag_source.dart';
+import '../../../../services/logging.dart';
 
 class CategoryPage extends StatefulWidget {
   const CategoryPage({
     super.key,
     required this.controller,
-    required this.sortSettings,
     required this.category,
   });
 
   final ArchiveController controller;
-
-  /// Shared with every other archive table and owned by `AppShell`, so a sort
-  /// picked here is the one they all open in - and the rail's other mounted
-  /// tables follow it without being rebuilt by hand.
-  final ArchiveSortSettings sortSettings;
-
   final ArchiveCategory category;
 
   @override
@@ -54,6 +43,8 @@ class _CategoryPageState extends State<CategoryPage> {
   String _query = '';
   String? _filterVal;
   bool _starredOnly = false;
+  String _sortKey = 'name';
+  bool _sortAsc = true;
 
   bool _selectionMode = false;
   final Set<String> _selected = <String>{};
@@ -61,29 +52,10 @@ class _CategoryPageState extends State<CategoryPage> {
   ArchiveController get _ctrl => widget.controller;
   ArchiveCategory get _cat => widget.category;
 
-  /// Rebuilds on either the archive's own changes or a sort picked on another
-  /// mounted table. Built once rather than per build, so the `AnimatedBuilder`
-  /// is not resubscribing to a fresh `Listenable` every frame.
-  late final Listenable _repaint = Listenable.merge([
-    _ctrl,
-    widget.sortSettings,
-  ]);
-
-  List<SortOption> get _sortOpts => sortOptionsFor(columnsFor(_cat));
-
-  /// The stored sort, held to the keys this category's columns offer.
-  ({String key, bool asc}) get _sort =>
-      widget.sortSettings.resolve(_sortOpts.map((o) => o.key));
-
   @override
   void initState() {
     super.initState();
-    unawaited(
-      guarded(
-        '[Archive] load category meta',
-        () => _ctrl.loadMetaForCategory(_cat),
-      ),
-    );
+    unawaited(_ctrl.loadMetaForCategory(_cat));
   }
 
   @override
@@ -149,8 +121,7 @@ class _CategoryPageState extends State<CategoryPage> {
         return false;
       }).toList();
     }
-    final sort = _sort;
-    return sortArchiveKeys(keys, sort.key, sort.asc);
+    return sortArchiveKeys(keys, _sortKey, _sortAsc);
   }
 
   List<ArchiveKey> get _selectedKeys =>
@@ -178,10 +149,6 @@ class _CategoryPageState extends State<CategoryPage> {
     });
   }
 
-  void _onDropped() {
-    if (mounted) _exitSelection();
-  }
-
   void _setAllSelected(List<ArchiveKey> filtered, bool selected) {
     setState(() {
       if (selected) {
@@ -199,13 +166,14 @@ class _CategoryPageState extends State<CategoryPage> {
   }
 
   void _onSort(String key) {
-    unawaited(
-      guarded(
-        '[ArchiveSort] storing the picked sort',
-        () =>
-            widget.sortSettings.pick(key, offered: _sortOpts.map((o) => o.key)),
-      ),
-    );
+    setState(() {
+      if (_sortKey == key) {
+        _sortAsc = !_sortAsc;
+      } else {
+        _sortKey = key;
+        _sortAsc = true;
+      }
+    });
   }
 
   Future<void> _showKeyActions(BuildContext context, ArchiveKey key) {
@@ -214,21 +182,49 @@ class _CategoryPageState extends State<CategoryPage> {
       _ctrl,
       key,
       onRename: () => _showRenameDialog(context, key),
-      onDuplicate: () async {
-        await _ctrl.duplicateKey(key);
-        if (!context.mounted) return;
-        reportArchiveFailure(
-          context,
-          _ctrl.lastFailure,
-          context.l10n.archiveDuplicateFailed,
-        );
-      },
+      onDuplicate: () => _ctrl.duplicateKey(key),
       onToggleFavorite: () => _ctrl.toggleFavorite(key),
     );
   }
 
-  Future<void> _showRenameDialog(BuildContext context, ArchiveKey key) =>
-      promptRenameKey(context, controller: _ctrl, key: key);
+  Future<void> _showRenameDialog(BuildContext context, ArchiveKey key) async {
+    final colors = context.appColors;
+    final ctrl = TextEditingController(text: key.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: colors.dialogBackground,
+        title: Text(
+          context.l10n.fmRename,
+          style: TextStyle(color: colors.dialogText),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: TextStyle(color: colors.dialogText),
+          decoration: InputDecoration(
+            hintText: context.l10n.archiveFileName,
+            hintStyle: TextStyle(color: colors.textMuted),
+          ),
+          onSubmitted: (v) => Navigator.pop(c, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c),
+            child: Text(context.l10n.commonCancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(c, ctrl.text.trim()),
+            child: Text(context.l10n.fmRename),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (newName != null && newName.isNotEmpty && newName != key.name) {
+      await _ctrl.renameKey(key, newName);
+    }
+  }
 
   bool get _hasFilter =>
       _starredOnly || _filterVal != null || _query.isNotEmpty;
@@ -262,17 +258,10 @@ class _CategoryPageState extends State<CategoryPage> {
       return;
     }
     if (!_ctrl.isConnected) {
-      unawaited(
-        guarded(
-          '[Archive] open the picker',
-          () => promptConnectDevice(context),
-        ),
-      );
+      unawaited(promptConnectDevice(context, _ctrl.client));
       return;
     }
-    unawaited(
-      guarded('[Archive] sync category', () => _ctrl.syncCategory(_cat)),
-    );
+    unawaited(_ctrl.syncCategory(_cat));
   }
 
   void _clearFilters() {
@@ -290,7 +279,7 @@ class _CategoryPageState extends State<CategoryPage> {
     final catColor = colors.adaptCategoryHeader(_cat.color);
 
     return AnimatedBuilder(
-      animation: _repaint,
+      animation: _ctrl,
       builder: (context, _) {
         final filtered = _filtered;
         final total = _allKeys.length;
@@ -346,12 +335,6 @@ class _CategoryPageState extends State<CategoryPage> {
                         query: _query,
                         filterVal: _filterVal,
                         filterOpts: filterOpts,
-                        sort: (
-                          key: _sort.key,
-                          asc: _sort.asc,
-                          opts: _sortOpts,
-                          onSort: _onSort,
-                        ),
                         starredOnly: _starredOnly,
                         catColor: catColor,
                         colors: colors,
@@ -406,13 +389,7 @@ class _CategoryPageState extends State<CategoryPage> {
         return RefreshIndicator(
           color: catColor,
           displacement: 15,
-          // Returns the work rather than starting it: `RefreshIndicator` holds
-          // its spinner only until the future it is given settles, and
-          // `() async => unawaited(...)` settles at once - so the spinner
-          // flashed while the sync had not begun. The same defect as the three
-          // apps tables in #219, and the last one of its shape in `lib/`.
-          onRefresh: () =>
-              guarded('[Archive] pull to sync', () => _ctrl.syncCategory(_cat)),
+          onRefresh: () async => unawaited(_ctrl.syncCategory(_cat)),
           child: filtered.isEmpty
               ? SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -431,8 +408,8 @@ class _CategoryPageState extends State<CategoryPage> {
                   children: [
                     ArchiveColumnHeader(
                       cols: visibleCols,
-                      sortKey: _sort.key,
-                      sortAsc: _sort.asc,
+                      sortKey: _sortKey,
+                      sortAsc: _sortAsc,
                       onSort: _onSort,
                       colors: colors,
                       selectionMode: _selectionMode,
@@ -445,28 +422,21 @@ class _CategoryPageState extends State<CategoryPage> {
                         itemCount: filtered.length,
                         itemBuilder: (_, i) {
                           final key = filtered[i];
-                          final selected = _selected.contains(_keyId(key));
-                          return ArchiveKeyDragSource(
+                          return ArchiveTableRow(
                             key: ValueKey(_keyId(key)),
-                            archiveKey: key,
-                            selected: selected,
-                            selection: () => _selectedKeys,
-                            onDropped: _onDropped,
-                            child: ArchiveTableRow(
-                              flipperKey: key,
-                              cols: visibleCols,
-                              colors: colors,
-                              cat: _cat,
-                              progress: _ctrl.progressForKey(key),
-                              selectionMode: _selectionMode,
-                              selected: selected,
-                              onTap: () => _selectionMode
-                                  ? _toggleSelect(key)
-                                  : _showKeyActions(context, key),
-                              onLongPress: () => _selectionMode
-                                  ? _toggleSelect(key)
-                                  : _enterSelection(key),
-                            ),
+                            flipperKey: key,
+                            cols: visibleCols,
+                            colors: colors,
+                            cat: _cat,
+                            progress: _ctrl.progressForKey(key),
+                            selectionMode: _selectionMode,
+                            selected: _selected.contains(_keyId(key)),
+                            onTap: () => _selectionMode
+                                ? _toggleSelect(key)
+                                : _showKeyActions(context, key),
+                            onLongPress: () => _selectionMode
+                                ? _toggleSelect(key)
+                                : _enterSelection(key),
                           );
                         },
                       ),
@@ -534,7 +504,21 @@ class _CategoryPageState extends State<CategoryPage> {
     );
     if (dir == null) return;
 
-    final saved = await saveKeysInto(keys, dir);
+    final sep = io.Platform.pathSeparator;
+    var saved = 0;
+    for (final k in keys) {
+      try {
+        final bytes = await io.File(k.localPath!).readAsBytes();
+        await io.File('$dir$sep${k.fileName}').writeAsBytes(bytes, flush: true);
+        saved++;
+      } catch (e) {
+        // One per file, name included, so a large selection against a full
+        // disk would fill LogService.historyLimit on its own. The notification
+        // below carries the count; the cause wants recording once per batch,
+        // not per file.
+        LogService.info('[Archive] bulk download ${k.fileName} failed: $e');
+      }
+    }
     _exitSelection();
     if (!context.mounted) return;
     context.showNotification(

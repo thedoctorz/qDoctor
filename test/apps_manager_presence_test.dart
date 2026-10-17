@@ -5,32 +5,18 @@ import 'package:flipperlib/flipperlib.dart' hide File;
 import 'package:flipperlib/flipperlib.dart' as fl show File;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:protobuf/protobuf.dart' show GeneratedMessage;
-import 'package:qunleashed/pages/apps/data/catalog_api.dart';
-import 'package:qunleashed/pages/apps/data/catalog_context.dart';
-import 'package:qunleashed/pages/apps/data/device_source.dart';
-import 'package:qunleashed/pages/apps/data/install_engine.dart';
-import 'package:qunleashed/pages/apps/data/manifest_registry.dart';
-import 'package:qunleashed/pages/apps/data/models/manifest.dart';
-import 'package:qunleashed/services/storage/paths.dart';
+import 'package:doctormobile/pages/apps/data/catalog_api.dart';
+import 'package:doctormobile/pages/apps/data/catalog_context.dart';
+import 'package:doctormobile/pages/apps/data/device_source.dart';
+import 'package:doctormobile/pages/apps/data/install_engine.dart';
+import 'package:doctormobile/pages/apps/data/manifest_registry.dart';
+import 'package:doctormobile/pages/apps/data/models/manifest.dart';
 
 /// A device whose storage is whatever the test says it is.
 ///
 /// Only the four calls a scan makes are answered; everything else falls to
 /// [noSuchMethod], so a scan that starts reaching for something new fails
 /// loudly instead of quietly reading a default.
-/// This fake is one Flipper for its whole life. A dropped link does not move
-/// the scope in the real client either, so every token it hands out stays
-/// current.
-class _SameDeviceToken implements DeviceToken {
-  const _SameDeviceToken();
-
-  @override
-  bool get isCurrent => true;
-
-  @override
-  bool get isStale => false;
-}
-
 class _FakeClient implements FlipperClient {
   /// Directory path -> entries, as `storageList` would report them.
   final Map<String, List<fl.File>> tree = {};
@@ -61,15 +47,6 @@ class _FakeClient implements FlipperClient {
 
   @override
   bool get isRpcReady => isConnected && mode == FlipperMode.rpc;
-
-  @override
-  DeviceToken get deviceToken => const _SameDeviceToken();
-
-  @override
-  Future<T> runTask<T>(
-    FlipperRequestPriority priority,
-    Future<T> Function() body,
-  ) => body();
 
   /// storageList and storageReadChunked are extension methods, so they resolve
   /// statically and arrive here rather than being overridable themselves.
@@ -208,32 +185,6 @@ void main() {
   late _FakeEngine engine;
   late DeviceSource source;
   late Directory backup;
-  late Directory documents;
-
-  // The backup seam covers the mirror, not the manifest cache beside it,
-  // which is filed under the device's name straight off the documents
-  // directory. Without this that cache lands in the developer's own Documents
-  // folder, under a Flipper that does not exist.
-  //
-  // For the whole file rather than per case: the save runs unawaited, so a
-  // teardown that put the real directory back would be the one a late write
-  // lands in.
-  setUpAll(() {
-    documents = Directory.systemTemp.createTempSync('apps_presence_docs');
-    debugUseDocumentsRoot(documents);
-  });
-
-  tearDownAll(() {
-    debugUseDocumentsRoot(null);
-    // Tolerated because the save that put a file here is unawaited and can
-    // still hold it open. The directory is under the system temp root either
-    // way, and failing the run over it would make this test flaky.
-    try {
-      if (documents.existsSync()) documents.deleteSync(recursive: true);
-    } on FileSystemException {
-      return;
-    }
-  });
 
   /// A device that reports [manifests] as installed and [onDisk] as the apps
   /// actually present under /ext/apps/Tools.

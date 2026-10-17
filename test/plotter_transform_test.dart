@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/plotter/plot_controller.dart';
+import 'package:doctormobile/pages/tools/plotter/plot_controller.dart';
 
 double _screenX({
   required double dataPos,

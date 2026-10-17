@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-import '../components/sensitive_surface.dart';
 import '../services/localization/l10n.dart';
 import '../theme/theme.dart';
 
 enum FlipperRootTab { device, archive, apps, tools }
+
+final ValueNotifier<FlipperRootTab?> rootTabRequests =
+    ValueNotifier<FlipperRootTab?>(null);
+
+void requestRootTab(FlipperRootTab tab) {
+  rootTabRequests.value = tab;
+}
 
 /// One icon-only destination of the desktop side rail. [color] tints both the
 /// icon and the selected pill behind it.
@@ -209,7 +215,7 @@ class FlipperRailIcon extends StatelessWidget {
   }
 }
 
-class _BottomTab extends StatelessWidget with VisibleSurface {
+class _BottomTab extends StatelessWidget {
   const _BottomTab({
     required this.icon,
     required this.label,

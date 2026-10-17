@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(qunleashed_native LANGUAGES C)
+project(doctormobile_native LANGUAGES C)
 
 # Native FFI libraries for the MIFARE key-recovery tools. Each subdirectory is a
 # self-contained shared library the app loads via dart:ffi:
@@ -9,3 +9,7 @@ project(qunleashed_native LANGUAGES C)
 add_subdirectory(mfkey32)
 add_subdirectory(hardnested)
 add_subdirectory(faaccrack)
+
+# Our canonical Sub-GHz engine (Hitag2Hell + PSA): Metal on Apple, Vulkan on
+# Android/Windows, CPU fallback everywhere else.
+add_subdirectory(doctor_subghz)

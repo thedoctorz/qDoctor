@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../../../services/guarded.dart';
 import '../../../components/archive/category.dart';
 import '../../../components/archive/models/key.dart';
 import '../../../components/cardlist.dart';
@@ -41,12 +40,7 @@ class _HomeWidgetPickerPageState extends State<HomeWidgetPickerPage> {
     // list as their metadata gets parsed.
     for (final cat in ArchiveCategory.values) {
       if (cat.launch.hasProtocolRules) {
-        unawaited(
-          guarded(
-            '[WidgetPicker] load category meta',
-            () => _ctrl.loadMetaForCategory(cat),
-          ),
-        );
+        unawaited(_ctrl.loadMetaForCategory(cat));
       }
     }
   }

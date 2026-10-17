@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../services/localization/l10n.dart';
 import '../../../theme/theme.dart';
+import '../models/device_info.dart';
 import 'flipper_mockup.dart';
 
 class DevicePageHeader extends StatelessWidget {
@@ -17,6 +18,7 @@ class DevicePageHeader extends StatelessWidget {
     this.deviceInfo = const {},
     this.connectionLabel = 'USB',
     this.connectionIcon = Icons.usb,
+    this.showStats = false,
     this.onOpenFullInfo,
   });
 
@@ -30,6 +32,7 @@ class DevicePageHeader extends StatelessWidget {
   final Map<String, String> deviceInfo;
   final String connectionLabel;
   final IconData connectionIcon;
+  final bool showStats;
   final VoidCallback? onOpenFullInfo;
 
   @override
@@ -61,6 +64,12 @@ class DevicePageHeader extends StatelessWidget {
                         deviceInfo: deviceInfo,
                         connectionLabel: connectionLabel,
                         connectionIcon: connectionIcon,
+                        stats: showStats
+                            ? HeaderDeviceStats(
+                                deviceInfo: deviceInfo,
+                                color: colors.onAccent,
+                              )
+                            : null,
                       ),
                     ),
                   ),
@@ -115,6 +124,13 @@ class DevicePageHeader extends StatelessWidget {
                       subtitle,
                       style: TextStyle(fontSize: 12, color: colors.onAccent),
                     ),
+                    if (showStats) ...[
+                      const SizedBox(height: 6),
+                      HeaderDeviceStats(
+                        deviceInfo: deviceInfo,
+                        color: colors.onAccent,
+                      ),
+                    ],
                   ],
                 ),
               ],
@@ -122,6 +138,92 @@ class DevicePageHeader extends StatelessWidget {
           },
         ),
       ),
+    );
+  }
+}
+
+class HeaderDeviceStats extends StatelessWidget {
+  const HeaderDeviceStats({
+    super.key,
+    required this.deviceInfo,
+    required this.color,
+  });
+
+  final Map<String, String> deviceInfo;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final charge = DeviceInfoReader.number(deviceInfo, const [
+      'power.charge_level',
+      'power.charge',
+      'charge_level',
+      'charge',
+    ]);
+    final current = DeviceInfoReader.number(deviceInfo, const [
+      'power.battery_current',
+      'power.current_gauge',
+      'power.current',
+    ]);
+    final charging = current != null && current > 5;
+    final usedBytes = DeviceInfoReader.number(deviceInfo, const [
+      'storage.sdcard.used_bytes',
+      'storage.sdcard.used',
+    ]);
+    final totalBytes = DeviceInfoReader.number(deviceInfo, const [
+      'storage.sdcard.total_bytes',
+      'storage.sdcard.total',
+    ]);
+    final storage = usedBytes != null && totalBytes != null && totalBytes > 0
+        ? (usedBytes / totalBytes * 100).clamp(0.0, 100.0)
+        : DeviceInfoReader.number(deviceInfo, const [
+            'storage.sdcard.used_percent',
+          ]);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _Stat(
+          icon: charging ? Icons.battery_charging_full : Icons.battery_full,
+          value: _percent(charge),
+          color: color,
+        ),
+        const SizedBox(width: 12),
+        _Stat(icon: Icons.sd_card, value: _percent(storage), color: color),
+      ],
+    );
+  }
+
+  static String _percent(double? value) {
+    if (value == null || !value.isFinite) return '—';
+    return '${value.round()}%';
+  }
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({required this.icon, required this.value, required this.color});
+
+  final IconData icon;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: color,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
     );
   }
 }

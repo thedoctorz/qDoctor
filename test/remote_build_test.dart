@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/services/assembler/remote_build_service.dart';
+import 'package:doctormobile/services/assembler/remote_build_service.dart';
 
 /// The live test runs only against a real deployment:
 ///   QU_BUILD_SERVER_URL=https://flibler.aperturefox.ru \
@@ -46,7 +46,7 @@ class _FakeBuildServer {
   Future<void> _handle(HttpRequest request) async {
     final body = await request.fold<List<int>>([], (a, b) => a..addAll(b));
     final userAgent = request.headers.value(HttpHeaders.userAgentHeader) ?? '';
-    if (!userAgent.contains('qUnleashed')) {
+    if (!userAgent.contains('DoctorMobile')) {
       failures.add('user-agent: $userAgent');
     }
     if (request.headers.value('X-QU-Sign') != _expectedSign(request, body)) {
@@ -425,7 +425,7 @@ void main() {
           'https://catalog.flipperzero.one/api/v0/application/flappy_bird',
         ),
       );
-      req.headers.set(HttpHeaders.userAgentHeader, 'qunleashed-app');
+      req.headers.set(HttpHeaders.userAgentHeader, 'doctormobile-app');
       final res = await req.close();
       final detail = jsonDecode(
         await res.transform(utf8.decoder).join(),

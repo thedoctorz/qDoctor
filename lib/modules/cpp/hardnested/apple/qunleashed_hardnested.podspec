@@ -14,7 +14,7 @@ bundled minlzlib.
                        DESC
   s.homepage         = 'https://github.com/mishamyte/qUnleashed'
   s.license          = { :type => 'GPLv3' }
-  s.author           = { 'qUnleashed' => 'noreply@localhost' }
+  s.author           = { 'DoctorMobile' => 'noreply@localhost' }
 
   s.source           = { :path => '.' }
   s.source_files     = 'qunleashed_hardnested_unity.c'

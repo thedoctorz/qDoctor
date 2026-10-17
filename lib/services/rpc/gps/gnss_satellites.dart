@@ -20,7 +20,7 @@ int resolveSatellites({required double accuracy, int? realCount}) {
 }
 
 class GnssSatelliteSource {
-  static const MethodChannel _channel = MethodChannel('qunleashed/gnss');
+  static const MethodChannel _channel = MethodChannel('doctormobile/gnss');
 
   final bool _supported = Platform.isAndroid;
   bool _started = false;

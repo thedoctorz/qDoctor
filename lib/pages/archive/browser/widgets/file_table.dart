@@ -1,10 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import '../../../../components/cancel_button.dart';
-import '../../../../components/name_rule.dart';
-import '../../../../services/localization/l10n.dart';
-import '../../../../components/notification.dart';
 import '../../../../theme/theme.dart';
 import '../../../../components/filelist/progress_fill.dart';
 import '../columns.dart';
@@ -128,7 +124,6 @@ class FileTableRow extends StatefulWidget {
     this.selected = false,
     this.autoEdit = false,
     this.progress,
-    this.onCancel,
   });
 
   final RemoteEntry entry;
@@ -140,7 +135,6 @@ class FileTableRow extends StatefulWidget {
   final bool selected;
   final bool autoEdit;
   final double? progress;
-  final VoidCallback? onCancel;
 
   @override
   State<FileTableRow> createState() => _FileTableRowState();
@@ -185,10 +179,6 @@ class _FileTableRowState extends State<FileTableRow> {
     super.dispose();
   }
 
-  void _cancelEdit() {
-    setState(() => _editing = false);
-  }
-
   void _startEdit() {
     _renameCtrl.text = widget.entry.name;
     setState(() => _editing = true);
@@ -198,17 +188,6 @@ class _FileTableRowState extends State<FileTableRow> {
     final newName = _renameCtrl.text.trim();
     if (newName.isEmpty || newName == widget.entry.name) {
       setState(() => _editing = false);
-      return;
-    }
-    // The same rule the dialogs use, said in a toast because a row has nowhere
-    // to put an error message. Without it the name went to `rename`, which
-    // answered with a failure that could not say which character was wrong.
-    // #277
-    final problem = deviceNameRule.describe(context.l10n, newName);
-    if (problem != null) {
-      context.showNotification(problem, type: QNotificationType.error);
-      // The editor stays open on the name the user typed, which is the only
-      // place they can fix it.
       return;
     }
     setState(() {
@@ -231,7 +210,7 @@ class _FileTableRowState extends State<FileTableRow> {
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    final blocked = _editing || _renaming || widget.entry.pending;
+    final blocked = _editing || _renaming;
 
     return MouseRegion(
       onEnter: _isDesktop ? (_) => setState(() => _hovered = true) : null,
@@ -295,7 +274,7 @@ class _FileTableRowState extends State<FileTableRow> {
 
   Widget _cell(QAppColors colors, FileCol col) {
     if (col.width == 0) return _nameCell(colors);
-    final muted = widget.entry.isHidden || widget.entry.pending;
+    final muted = widget.entry.isHidden;
     return Align(
       alignment: col.right ? Alignment.centerRight : Alignment.centerLeft,
       child: Text(
@@ -311,7 +290,7 @@ class _FileTableRowState extends State<FileTableRow> {
   }
 
   Widget _nameCell(QAppColors colors) {
-    final muted = widget.entry.isHidden || widget.entry.pending;
+    final muted = widget.entry.isHidden;
     return Row(
       children: [
         FileIconBadge(entry: widget.entry, size: 28, muted: muted),
@@ -350,35 +329,23 @@ class _FileTableRowState extends State<FileTableRow> {
     );
   }
 
-  Widget _spinner(QAppColors colors) => _slot(
-    SizedBox(
-      width: 14,
-      height: 14,
-      child: CircularProgressIndicator(strokeWidth: 2, color: colors.accent),
-    ),
-  );
-
   Widget _trailing(QAppColors colors) {
-    if (_renaming) return _spinner(colors);
-    if (_editing) {
-      // Both, because a refused name keeps the editor open, and with only the
-      // check button there was nothing on screen saying how to back out.
-      // Clearing the field closes it too, which nobody would guess.
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _iconBtn(Icons.close_rounded, colors.textMuted, _cancelEdit),
-          _iconBtn(Icons.check_rounded, colors.accent, _commitEdit),
-        ],
+    if (_renaming) {
+      return _slot(
+        SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: colors.accent,
+          ),
+        ),
       );
     }
-    if (widget.progress != null) {
-      final cancel = widget.onCancel;
-      return cancel == null
-          ? _spinner(colors)
-          : _slot(QCancelButton(onCancel: cancel));
+    if (_editing) {
+      return _iconBtn(Icons.check_rounded, colors.accent, _commitEdit);
     }
-    if (widget.selectionMode || widget.entry.pending) {
+    if (widget.selectionMode) {
       return const SizedBox(width: kFileTrailingWidth);
     }
     if (widget.entry.isDir && !(_isDesktop && _hovered)) {

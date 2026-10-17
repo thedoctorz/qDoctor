@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/services/http/app_http.dart';
+import 'package:doctormobile/services/http/app_http.dart';
 
 /// A payload big enough that the split matters, small enough to stay quick.
 final Map<String, Object?> payload = {
@@ -347,10 +347,10 @@ void main() {
     test('forwards caller headers', () async {
       await AppHttp.getJsonCached(
         server.uri,
-        headers: {HttpHeaders.userAgentHeader: 'qunleashed-test/9'},
+        headers: {HttpHeaders.userAgentHeader: 'doctormobile-test/9'},
       );
 
-      expect(server.userAgents.last, 'qunleashed-test/9');
+      expect(server.userAgents.last, 'doctormobile-test/9');
     });
 
     test('revalidates without If-None-Match when there was no etag', () async {

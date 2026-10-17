@@ -27,6 +27,28 @@ class QAppConfig {
           tertiary: Color(0xFFFFD580),
         ),
       ),
+      FirmwareEntry(
+        name: 'Momentum',
+        shortName: 'momentum',
+        icon: 'momentum.png',
+        matchKeywords: ['momentum', 'next-flip'],
+        colors: FirmwareColors(
+          primary: Color(0xFF5B4DFF),
+          secondary: Color(0xFF3D2FD4),
+          tertiary: Color(0xFFB8B0FF),
+        ),
+      ),
+      FirmwareEntry(
+        name: 'Custom',
+        shortName: 'custom',
+        icon: 'custom.png',
+        localFile: true,
+        colors: FirmwareColors(
+          primary: Color(0xFF546E7A),
+          secondary: Color(0xFF37474F),
+          tertiary: Color(0xFFB0BEC5),
+        ),
+      ),
     ],
   );
 
@@ -52,12 +74,15 @@ class FirmwareEntry {
   final List<String> matchKeywords;
   final FirmwareColors colors;
 
+  final bool localFile;
+
   const FirmwareEntry({
     required this.name,
     required this.shortName,
     required this.icon,
     this.matchKeywords = const [],
     required this.colors,
+    this.localFile = false,
   });
 
   String get assetPath => 'assets/img/firmware/$icon';

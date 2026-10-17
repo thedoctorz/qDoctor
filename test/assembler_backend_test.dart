@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:archive/archive_io.dart';
 import 'package:dartufbt/dartufbt.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/services/assembler/backend_mode.dart';
-import 'package:qunleashed/services/assembler/build_service.dart';
+import 'package:doctormobile/services/assembler/backend_mode.dart';
+import 'package:doctormobile/services/assembler/build_service.dart';
 
 AssemblerBackendChoice _choice({
   bool platformSupported = true,

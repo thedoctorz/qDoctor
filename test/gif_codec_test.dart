@@ -2,7 +2,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/components/codec/gif.dart';
+import 'package:doctormobile/components/codec/gif.dart';
 
 /// One decoded frame: palette indices at the GIF's own resolution.
 /// [pixels] is the composited screen after this frame is drawn, which is what

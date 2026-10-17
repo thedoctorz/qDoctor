@@ -9,16 +9,15 @@ import 'package:crypto/crypto.dart';
 import 'package:flipperlib/flipperlib.dart';
 import 'package:flutter/foundation.dart';
 
-import '../../../services/connection/link_service.dart';
-import '../../../services/guarded.dart';
 import '../../../services/progress_throttle.dart';
-import '../../../services/telemetry/traced.dart';
 import 'source.dart';
 import 'update_state.dart';
 import '../../../services/logging.dart';
 
 const _tag = '[FirmwareInstaller]';
 const _remoteRoot = '/ext/update';
+const _maxUploadAttempts = 4;
+const _reconnectWait = Duration(seconds: 60);
 
 /// The installer's running commentary, tagged.
 ///
@@ -31,74 +30,12 @@ void _log(String msg) => LogService.info('$_tag $msg');
 class FirmwareInstaller {
   const FirmwareInstaller._();
 
-  /// Flashes [source] onto the Flipper that is in play when this is called.
-  ///
-  /// Declared as one task, so the directory it makes, every file it uploads,
-  /// the md5 checks between them and the command that finally starts the update
-  /// all reach that same Flipper. Warm sessions let the user switch devices
-  /// without the link dropping, and before this the second half of a firmware
-  /// went wherever they switched to - onto a Flipper holding the first half of
-  /// nothing, told to install it.
-  ///
-  /// Nothing here gives up when the user switches. Half a firmware is worse
-  /// than an old one, so a flash that has begun finishes where it began; what a
-  /// switch changes is only which screen is entitled to show its progress, and
-  /// that is [UpdateState.deviceId]'s job.
-  /// Flashes [source], and hands back the state it ended on.
-  ///
-  /// Returned as well as published through [onState], because the two answer
-  /// different questions: the stream is what the screen follows, and the
-  /// return is what the caller acts on afterwards.
-  ///
-  /// Three outcomes reach a caller - [UpdateDone], [UpdateError] and
-  /// [UpdateWaitingForReconnect], the last being a DFU flash the user has to
-  /// power-cycle out of. Which of them happened used to be knowable only by
-  /// inspecting the last state the button had seen, and that worked solely
-  /// because `UpdateWaitingForReconnect` is terminal: one trailing emission
-  /// anywhere and #118's latch came back silently, with every test still
-  /// green. #132.
-  ///
-  /// Never throws, as before: every failure inside arrives as an
-  /// [UpdateError], which is also why the caller's own try/catch around this
-  /// call could go.
-  /// Timed as one operation - ADR 0013 §2 - and timed from **outside**
-  /// `runTask`, so the span covers the wait in the request queue as well as
-  /// the install. The user is waiting for both, and a background-priority task
-  /// behind a long file listing is exactly the case where the two differ.
-  ///
-  /// `trace.failed()` rather than a throw, because this method is documented
-  /// as never throwing: every fault arrives as an [UpdateError]. Without that
-  /// call every failed install would be a successful transaction, which is
-  /// worse than none - a real duration with a false verdict.
-  ///
-  /// `outcome` carries the state's type and nothing from inside it. The error
-  /// text is a localised, user-facing string that may name a file.
-  static Future<UpdateState> install({
-    required FirmwareSource source,
-    required FlipperClient client,
-    required void Function(UpdateState) onState,
-  }) => traced('firmware.install', (trace) async {
-    trace.note('source', source.isRemote ? 'remote' : 'local');
-    final state = await client.runTask(
-      FlipperRequestPriority.background,
-      () => _install(source: source, client: client, onState: onState),
-    );
-    trace.note('outcome', state.runtimeType.toString());
-    if (state is UpdateError) trace.failed();
-    return state;
-  });
-
-  static Future<UpdateState> _install({
+  static Future<void> install({
     required FirmwareSource source,
     required FlipperClient client,
     required void Function(UpdateState) onState,
   }) async {
     final tempDir = io.Directory.systemTemp.createTempSync('flipper_fw_');
-    // The wait for the Flipper to come back happens after this directory is
-    // gone: an install runs for as long as it runs - half an hour on a large
-    // firmware - and an unpacked bundle has no business sitting on disk for
-    // it.
-    FlipperDevice? awaitReturnOf;
     try {
       if (source.isRemote) onState(const UpdateFetching());
 
@@ -109,14 +46,13 @@ class FirmwareInstaller {
 
       final extracted = await _extractFlat(archivePath);
       if (extracted.dirName == null || extracted.files.isEmpty) {
-        return _report(onState, UpdateError(l10n.firmwareErrorEmptyArchive));
+        onState(UpdateError(l10n.firmwareErrorEmptyArchive));
+        return;
       }
 
       if (!client.isConnected) {
-        // Awaited rather than returned straight: the catch below is what
-        // turns a throw into an UpdateError, and a future handed back
-        // unawaited leaves the try before it can.
-        return await _installViaDfu(extracted.files, onState);
+        await _installViaDfu(extracted.files, onState);
+        return;
       }
 
       final remoteDir = '$_remoteRoot/${extracted.dirName}';
@@ -140,185 +76,65 @@ class FirmwareInstaller {
           continue;
         }
 
-        _log('uploading ${f.name} (${f.data.length}B)');
-        uploadThrottle.reset();
-        onState(UpdateUploading(0, fileIndex: i + 1, fileCount: files.length));
-        await client.storageWriteChunked(
-          flipperPath,
-          f.data,
-          onProgress: (p) {
-            if (uploadThrottle.shouldEmit(p)) {
-              onState(
-                UpdateUploading(p, fileIndex: i + 1, fileCount: files.length),
-              );
+        for (var attempt = 1; ; attempt++) {
+          _log('uploading ${f.name} (${f.data.length}B), attempt $attempt');
+          uploadThrottle.reset();
+          onState(
+            UpdateUploading(0, fileIndex: i + 1, fileCount: files.length),
+          );
+          try {
+            await client.storageWriteChunked(
+              flipperPath,
+              f.data,
+              onProgress: (p) {
+                if (uploadThrottle.shouldEmit(p)) {
+                  onState(
+                    UpdateUploading(
+                      p,
+                      fileIndex: i + 1,
+                      fileCount: files.length,
+                    ),
+                  );
+                }
+              },
+            );
+            break;
+          } catch (e) {
+            if (attempt >= _maxUploadAttempts || !client.isLinkDropError(e)) {
+              rethrow;
             }
-          },
-        );
+            LogService.warn('$_tag upload of ${f.name} lost link: $e');
+            if (!await client.waitForRpcSession(_reconnectWait)) rethrow;
+            await _mkdirSafe(client, remoteDir);
+          }
+        }
       }
 
       if (manifestPath == null) {
-        return _report(onState, UpdateError(l10n.firmwareErrorNoManifest));
+        onState(UpdateError(l10n.firmwareErrorNoManifest));
+        return;
       }
 
       _log('starting update: $manifestPath');
       onState(const UpdateStarting());
-      final target = client.bindCurrentSession().device;
       await client.runUpdate(UpdateRequest(updateManifest: manifestPath));
 
-      // Over USB the Flipper is followed through the install: it switches its
-      // USB controller off to reboot into the updater, and the port coming
-      // back is the signal to take the link again. Over BLE it is the user's
-      // call — the radio comes back whenever the install is done, and only
-      // they know when to reach for it.
-      awaitReturnOf = (target?.isUsb ?? false) ? target : null;
-      if (awaitReturnOf == null) {
-        return _report(onState, const UpdateDone());
-      }
-      onState(const UpdateInstalling());
+      onState(const UpdateDone());
     } catch (e, st) {
       // error rather than the commentary helper: UpdateError hands the UI
       // e.toString() and no stack, so this is the only place the stack for
       // a flash that died mid-write exists at all - and that is the one
       // failure in this app most worth reproducing from a bug report.
       LogService.error('$_tag update failed: $e\n$st');
-      return _report(onState, UpdateError(e.toString()));
+      onState(UpdateError(e.toString()));
     } finally {
       try {
         tempDir.deleteSync(recursive: true);
-      } catch (e) {
-        // An extracted firmware bundle is tens to hundreds of megabytes, and
-        // a cleanup that fails leaves all of it in the system temp directory
-        // for good. It accumulates per install, the user feels it as disk
-        // pressure, and nothing connects it back to this app. #119.
-        LogService.warn('$_tag could not remove ${tempDir.path}: $e');
-      }
-    }
-
-    // Only reached when the install bound a USB device: every other path has
-    // returned by now, which is what lets this end in one outcome rather than
-    // a second nullable check.
-    final target = awaitReturnOf;
-    await LinkService.instance.awaitUsbReturn(target);
-    _log('${target.name} is back on the cable');
-    return _report(onState, const UpdateDone());
-  }
-
-  /// Publishes [state] and hands it back, so a terminal state is named once
-  /// rather than built twice.
-  static UpdateState _report(
-    void Function(UpdateState) onState,
-    UpdateState state,
-  ) {
-    onState(state);
-    return state;
-  }
-
-  /// Waits for [client] to come back after a recovery flash.
-  ///
-  /// True if it did, false if it did not - a bad cable, a device that needs a
-  /// manual power cycle, or a flash that left it unable to boot. The deadline
-  /// is a return value rather than an exception because it is an outcome of
-  /// the recovery, not a fault in the wait: whoever called has a transitional
-  /// state to leave either way.
-  ///
-  /// It lives here rather than in the button because the state being waited
-  /// out is the one this class enters - see the `UpdateWaitingForReconnect`
-  /// below, which is the only place it is ever emitted. The button was just
-  /// where the waiting happened to be written. #118.
-  ///
-  /// Not [FlipperClient.waitForRpcSession], which has the same shape and is
-  /// not the same question. That one ends early on a terminal disconnect and
-  /// requires a live transport, both right for a session that faulted and
-  /// should come back - and both wrong here, where the device has just been
-  /// flashed, is deliberately gone, and has to re-enumerate before any
-  /// transport exists. It would report a brick the moment the old link died.
-  static Future<bool> awaitReconnect(
-    FlipperClient client, {
-    Duration timeout = const Duration(seconds: 30),
-  }) async {
-    if (client.isConnected) return true;
-    // The subscription is owned rather than left to `firstWhere`, because
-    // `Future.timeout` times out the future and cannot reach the work behind
-    // it: every recovery that ran out of time used to leave a listener on a
-    // broadcast stream that lives as long as the client. Owning it also means
-    // a stream that ends or errors is an outcome this can name, instead of
-    // `firstWhere` raising a bare `StateError` for a closed stream.
-    final done = Completer<bool>();
-    void finish(bool back) {
-      if (!done.isCompleted) done.complete(back);
-    }
-
-    final sub = client.connectionStream.listen(
-      (_) {
-        if (client.isConnected) finish(true);
-      },
-      // An error does not end a broadcast stream, so the reconnect can still
-      // arrive: this is recorded and the wait runs on to the deadline. Ending
-      // it here would turn one spurious error into a reported brick.
-      onError: (Object e, StackTrace st) => LogService.warn(
-        '$_tag reconnect wait saw a stream error: '
-        '${LogService.describe(e, st)}',
-      ),
-      // The link ending says nothing about the device, and it ends
-      // milliseconds after the flash rather than half a minute later - so
-      // reporting a brick would be a guess written into the log as a fact, on
-      // the most consequential screen in the app. Asking the client is the
-      // only honest answer left, and it is only worth a line when the answer
-      // is no: a device that came back quietly is a success, not a warning.
-      onDone: () {
-        if (!done.isCompleted && !client.isConnected) {
-          LogService.warn('$_tag reconnect wait ended without an answer');
-        }
-        finish(client.isConnected);
-      },
-    );
-    try {
-      return await done.future.timeout(timeout);
-    } on TimeoutException catch (e, st) {
-      // error, not the commentary helper: the device was flashed and did not
-      // come back, which is the worst outcome this app produces. Before #118
-      // this exception was caught and dropped, so the one session most worth
-      // reading a bug report about held nothing at all.
-      LogService.error(
-        '$_tag device did not reconnect after recovery: '
-        '${LogService.describe(e, st)}',
-      );
-      return false;
-    } finally {
-      // Cancelled but not awaited. Releasing the listener is the whole reason
-      // this owns the subscription; when that teardown finishes is nobody's
-      // business, and the answer is already in hand. Awaiting it also wedged
-      // the wait under the widget-test clock, where the cancel future did not
-      // resolve inside a pump.
-      //
-      // Guarded all the same: a teardown that throws would otherwise arrive as
-      // an unlabelled [uncaught] in the middle of an install. #23
-      unawaited(guarded('[Installer] release state listener', sub.cancel));
+      } catch (_) {}
     }
   }
 
-  /// Timed as its own operation — ADR 0013 §2 names DFU separately from the
-  /// install it is reached from.
-  ///
-  /// It arrives as a **child span** of `firmware.install`, because `traced`
-  /// starts a transaction only when nothing else is tracing. That is the shape
-  /// worth having: a DFU recovery is always inside an install, and the two
-  /// durations answer different questions - "was the install slow" and "was it
-  /// slow because it fell back to DFU".
-  ///
-  /// `trace.failed()` for the same reason as its caller: every fault here
-  /// returns an [UpdateError] rather than throwing.
-  static Future<UpdateState> _installViaDfu(
-    List<_UpdateFile> files,
-    void Function(UpdateState) onState,
-  ) => traced('firmware.dfu', (trace) async {
-    final state = await _dfu(files, onState);
-    trace.note('outcome', state.runtimeType.toString());
-    if (state is UpdateError) trace.failed();
-    return state;
-  });
-
-  static Future<UpdateState> _dfu(
+  static Future<void> _installViaDfu(
     List<_UpdateFile> files,
     void Function(UpdateState) onState,
   ) async {
@@ -329,17 +145,17 @@ class FirmwareInstaller {
     final firmwareName = fuf?.firmware ?? 'firmware.dfu';
     final firmware = byName[firmwareName];
     if (firmware == null) {
-      return _report(
-        onState,
-        UpdateError(l10n.firmwareErrorNoBinary(firmwareName)),
-      );
+      onState(UpdateError(l10n.firmwareErrorNoBinary(firmwareName)));
+      return;
     }
     if (fuf == null) {
-      return _report(onState, UpdateError(l10n.firmwareErrorBadManifest));
+      onState(UpdateError(l10n.firmwareErrorBadManifest));
+      return;
     }
     final obError = fuf.optionBytesError;
     if (obError != null) {
-      return _report(onState, UpdateError(obError));
+      onState(UpdateError(obError));
+      return;
     }
     final radio = fuf.radio == null ? null : byName[fuf.radio!];
     _log(
@@ -368,20 +184,8 @@ class FirmwareInstaller {
         switch (message) {
           case RecoveryProgress(:final step, :final percent):
             onState(_dfuProgressState(step, percent));
-          case RecoveryLog(:final message, :final level):
-            // Recovery runs in a spawned isolate, so LogService's statics are
-            // not the ones the runner can reach - this port is the only way
-            // anything it saw crosses back. _log is commentary by contract
-            // and folds out of a release build, which for the four lines
-            // marked warning is the whole of the report: a radio stack that
-            // did not flash still ends in RecoveryDone, by design, and the
-            // button lands on "recovered". #119.
-            switch (level) {
-              case RecoveryLogLevel.progress:
-                _log('DFU: $message');
-              case RecoveryLogLevel.warning:
-                LogService.warn('$_tag DFU: $message');
-            }
+          case RecoveryLog(:final message):
+            _log('DFU: $message');
           case RecoveryDone():
             if (!done.isCompleted) done.complete();
           case RecoveryFailed(:final error, failure: final reason):
@@ -404,12 +208,11 @@ class FirmwareInstaller {
     await done.future;
     await sub.cancel();
 
-    return _report(
-      onState,
-      failure != null
-          ? UpdateError(failure.toString())
-          : const UpdateWaitingForReconnect(),
-    );
+    if (failure != null) {
+      onState(UpdateError(failure.toString()));
+    } else {
+      onState(const UpdateWaitingForReconnect());
+    }
   }
 
   static String _dfuFailureMessage(DfuHostFailure failure, String error) {
@@ -544,28 +347,11 @@ class FirmwareInstaller {
     }
   }
 
-  /// Makes [path] on the device, tolerating the one failure that is not one.
-  ///
-  /// A directory that is already there is the ordinary case and says nothing.
-  /// Everything else - a read-only /ext, a full card, no card at all - is a
-  /// reason the upload two steps later fails with a confusing write error,
-  /// and the two used to be indistinguishable. #119.
   static Future<void> _mkdirSafe(FlipperClient client, String path) async {
     try {
       await client.storageMkdir(MkdirRequest(path: path));
-    } catch (e) {
-      if (_alreadyExists(e)) return;
-      LogService.warn('$_tag could not create $path: $e');
-    }
+    } catch (_) {}
   }
-
-  /// Whether [error] is the firmware saying the directory is already there.
-  ///
-  /// Matched on the status text because that is how it arrives: flipperlib
-  /// classifies connection faults, not storage ones, so there is no type to
-  /// switch on here.
-  static bool _alreadyExists(Object error) =>
-      '$error'.contains('ERROR_STORAGE_EXIST');
 }
 
 class _UpdateFile {

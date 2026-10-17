@@ -1,4 +1,3 @@
-import '../../../services/guarded.dart';
 import '../../../services/localization/l10n.dart';
 
 import 'dart:async';
@@ -6,8 +5,6 @@ import 'dart:async';
 import 'package:flipperlib/flipperlib.dart' hide File;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import '../../../services/settings/persist.dart';
 
 import '../../../components/codec/fap/api_version.dart';
 import '../../../components/path.dart';
@@ -35,19 +32,52 @@ String aliasFromFapPath(String path) {
 /// both. Owned by `AppsBackend`; the registries and the install engine read it
 /// instead of reaching back into the backend.
 class CatalogContext {
-  CatalogContext({required this.client, required this.api});
+  CatalogContext({
+    required this.client,
+    required this.api,
+    required this.currentDeviceId,
+  });
 
   final FlipperClient client;
   final AppsCatalogApi api;
+
+  /// Id of the device the backend is currently bound to, read at the moment a
+  /// mode resolution finishes.
+  final String? Function() currentDeviceId;
 
   bool get isReady => client.isRpcReady;
 
   final ValueNotifier<CatalogMode> mode = ValueNotifier(CatalogMode.resolving);
 
+  String? _catalogApi;
+
+  String? _sdkApi;
+
   String? _deviceApi;
   String? _deviceTarget;
+  String? get catalogApi => _catalogApi;
+  String? get sdkApi => _sdkApi;
   String? get deviceApi => _deviceApi;
   String? get deviceTarget => _deviceTarget;
+
+  (int, int)? get apiMajorWindow {
+    final majors = <int>[
+      if (parseApi(_catalogApi) case final catalog?) catalog.$1,
+      if (parseApi(_sdkApi) case final sdk?) sdk.$1,
+    ];
+    if (majors.isEmpty) {
+      final only = parseApi(_deviceApi);
+      if (only == null) return null;
+      return (only.$1, only.$1);
+    }
+    var low = majors.first;
+    var high = majors.first;
+    for (final major in majors) {
+      if (major < low) low = major;
+      if (major > high) high = major;
+    }
+    return (low, high);
+  }
 
   List<AppSdk> serverSdks = const [];
   AppSdk? serverLatestSdk;
@@ -92,10 +122,8 @@ class CatalogContext {
     if (_preference == value) return;
     _preference = value;
     _preferenceLoaded = true;
-    await persistSetting(
-      _prefMode,
-      (prefs) => prefs.setString(_prefMode, value.name),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefMode, value.name);
     await resolveMode(force: true);
   }
 
@@ -110,11 +138,9 @@ class CatalogContext {
     }
     _modeResolving = true;
     if (force) mode.value = CatalogMode.resolving;
-    final token = client.deviceToken;
     try {
       await loadPreference();
       await ensureDeviceFilters();
-      if (token.isStale) return;
 
       var offline = false;
       try {
@@ -127,7 +153,6 @@ class CatalogContext {
         LogService.warn('[AppsBackend] fetchSdks failed: $e');
         offline = true;
       }
-      if (token.isStale) return;
       _catalogOffline = offline;
 
       final target = _deviceTarget;
@@ -146,17 +171,33 @@ class CatalogContext {
         return;
       }
 
+      if (_catalogApi != null &&
+          _preference != CatalogModePreference.manager &&
+          _preference != CatalogModePreference.sourceBuild) {
+        final catalogRes = resolveCatalogApi(targetSdks, _catalogApi);
+        if (catalogRes.verdict != ApiVerdict.tooOld) {
+          final picked = catalogRes.verdict == ApiVerdict.normal
+              ? (catalogRes.api ?? _catalogApi)
+              : _catalogApi;
+          _useCatalog(picked);
+          LogService.info(
+            '[AppsBackend] mode=${mode.value.name} catalog=$_catalogApi '
+            'sdk=$_sdkApi server=$serverApi picked=$picked '
+            'verdict=${catalogRes.verdict.name} pref=${_preference.name}',
+          );
+          return;
+        }
+      }
+
       final res = resolveCatalogApi(targetSdks, _deviceApi);
       // Probing the build server costs a round trip, so it only runs when the
       // answer can change the mode.
       final needsBuilder =
           res.verdict != ApiVerdict.normal ||
           _preference == CatalogModePreference.sourceBuild;
-      final builderAvailable = needsBuilder
+      _builderAvailable = needsBuilder
           ? await AssemblerController.instance.builderAvailable()
           : false;
-      if (token.isStale) return;
-      _builderAvailable = builderAvailable;
       final next = resolveCatalogMode(
         verdict: res.verdict,
         hasNearestApi: res.api != null,
@@ -180,41 +221,10 @@ class CatalogContext {
         'server=$serverApi picked=${res.api} verdict=${res.verdict.name} '
         'builder=$_builderAvailable pref=${_preference.name}',
       );
-    } catch (e) {
-      // Without this the mode stayed at `resolving`, which it was set to above
-      // when forced - so Settings -> Apps rendered its Recheck button as
-      // `resolving ? null : ...` and it was dead for as long as the page was
-      // open. #118's shape, and the rejection reached the zone unlabelled.
-      //
-      // It lands where a failed `fetchSdks` already lands: manager-only, with
-      // `catalogOffline` set, so Settings -> Apps says the catalogue could not
-      // be reached rather than blaming the firmware. That is right for this
-      // too - whatever threw, the catalogue is not usable this pass - and the
-      // actual cause is on this line rather than guessed at from the mode.
-      //
-      // The `finally` below still wins when the device changed under this
-      // pass, which is correct: that failure belonged to the Flipper that was
-      // attached when it started.
-      LogService.warn('[AppsBackend] resolveMode failed: $e');
-      _catalogOffline = true;
-      _useManagerOnly();
     } finally {
       _modeResolving = false;
-      if (token.isStale) {
-        // The device changed under this resolution, so what it worked out
-        // describes the Flipper that was attached when it started and the one
-        // attached now has nothing resolved for it. Nobody else will start
-        // that: the connection handler that moved the scope saw this pass
-        // still running and stood down. The hand-off belongs here.
-        mode.value = CatalogMode.resolving;
-        unawaited(
-          guarded(
-            '[AppsBackend] re-resolve for the new device',
-            () => resolveMode(force: true),
-          ),
-        );
-      } else if (mode.value != CatalogMode.resolving) {
-        resolvedForDeviceId = client.scopedDeviceId;
+      if (mode.value != CatalogMode.resolving) {
+        resolvedForDeviceId = currentDeviceId();
       }
     }
   }
@@ -261,6 +271,8 @@ class CatalogContext {
     api.target = null;
     api.api = null;
     api.unfiltered = false;
+    _catalogApi = null;
+    _sdkApi = null;
     _deviceApi = null;
     _deviceTarget = null;
     _compatApi = null;
@@ -270,12 +282,10 @@ class CatalogContext {
   Future<void> ensureDeviceFilters({bool required = false}) async {
     if (_deviceApi != null && _deviceTarget != null) return;
     if (!isReady && !required) return;
-    final token = client.deviceToken;
     try {
       final info = await client.awaitDeviceInfo().timeout(
         const Duration(seconds: 20),
       );
-      if (token.isStale) return;
       final target = _firstInfoValue(info, const [
         'hardware_target',
         'hardware.target',
@@ -293,8 +303,20 @@ class CatalogContext {
         'api.minor',
         'api_minor',
       ]);
+      final sdkMajor = _firstInfoValue(info, const [
+        'firmware.sdk.major',
+        'firmware_sdk_major',
+        'sdk.major',
+      ]);
+      final sdkMinor = _firstInfoValue(info, const [
+        'firmware.sdk.minor',
+        'firmware_sdk_minor',
+        'sdk.minor',
+      ]);
       if (target != null) _deviceTarget = 'f$target';
-      if (major != null) _deviceApi = '$major.${minor ?? '0'}';
+      if (major != null) _catalogApi = '$major.${minor ?? '0'}';
+      if (sdkMajor != null) _sdkApi = '$sdkMajor.${sdkMinor ?? '0'}';
+      _deviceApi = _catalogApi ?? _sdkApi;
       if (_deviceTarget != null && api.target == null) {
         api.target = _deviceTarget;
       }

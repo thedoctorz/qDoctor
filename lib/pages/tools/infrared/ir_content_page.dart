@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 
 import '../../../components/archive/category.dart';
 import '../../../services/archive/storage.dart';
-import 'send.dart';
 import 'widgets/ir_file_viewer.dart';
 import '../../../services/logging.dart';
 
@@ -18,16 +17,11 @@ class IrContentPage extends StatefulWidget {
     required this.fileName,
     required this.subtitle,
     required this.content,
-    required this.client,
   });
 
   final String fileName;
   final String subtitle;
   final String content;
-
-  /// The Flipper this page reads its name from and sends to. Taken by the
-  /// library page that pushes it, from the scope it was in. ADR 0002.
-  final FlipperClient client;
 
   @override
   State<IrContentPage> createState() => _IrContentPageState();
@@ -35,7 +29,7 @@ class IrContentPage extends StatefulWidget {
 
 class _IrContentPageState extends State<IrContentPage> {
   final ArchiveStorage _storage = ArchiveStorage();
-  late final FlipperClient _client = widget.client;
+  final FlipperClient _client = FlipperOneClient().get();
   late String _deviceName = l10n.irLibraryTab;
 
   @override
@@ -61,7 +55,6 @@ class _IrContentPageState extends State<IrContentPage> {
   Widget build(BuildContext context) {
     final bytes = utf8.encode(widget.content);
     return IrFileViewer(
-      client: _client,
       fileName: widget.fileName,
       subtitle: widget.subtitle,
       loading: false,
@@ -72,13 +65,24 @@ class _IrContentPageState extends State<IrContentPage> {
       onSend: ({required bytes, required onProgress}) async {
         final fileName = _safeName(widget.fileName);
         try {
-          await sendIrFile(_client, fileName, bytes, onProgress: onProgress);
+          final disconnected = Completer<void>();
+          late final StreamSubscription<FlipperConnectionState> sub;
+          sub = _client.connectionStream.listen((state) {
+            if (!state.connected && !disconnected.isCompleted) {
+              disconnected.completeError(StateError(l10n.irDisconnected));
+            }
+          });
+          await Future.any<void>([
+            _client.storageWriteChunked(
+              '/ext/infrared/$fileName',
+              bytes,
+              onProgress: onProgress,
+            ),
+            disconnected.future,
+          ]).whenComplete(sub.cancel);
           return true;
         } catch (e) {
-          // As the controller's sendToFlipper: the disconnect arrives as the
-          // sentence sendIrFile raises, and flipperlib records a link drop
-          // only at info.
-          LogService.warn('[IRBackend] send $fileName failed: $e');
+          LogService.info('[IRBackend] send $fileName failed: $e');
           return false;
         }
       },
@@ -90,12 +94,7 @@ class _IrContentPageState extends State<IrContentPage> {
             _safeName(widget.fileName),
             bytes,
           );
-        } catch (e) {
-          // As the controller's saveToArchive, which this was swallowing.
-          LogService.warn(
-            '[IRBackend] save ${_safeName(widget.fileName)} failed: $e',
-          );
-        }
+        } catch (_) {}
       },
     );
   }

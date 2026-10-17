@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../../services/guarded.dart';
 import '../../../services/localization/l10n.dart';
 import '../../../components/icon.dart';
 import 'widgets/mode_badge.dart';
@@ -8,7 +7,6 @@ import 'widgets/states.dart';
 import '../../../components/navigation.dart';
 import '../../../theme/theme.dart';
 import '../../../services/assembler/controller.dart';
-import '../../../components/notification.dart';
 import '../data/apps_backend.dart';
 import '../manager/install_page.dart';
 import '../manager/page.dart';
@@ -140,16 +138,14 @@ class _CatalogViewState extends State<CatalogView> {
     openRoute(context, AppRoute.assemblerConsole);
   }
 
-  // The detail page fetches the app in initState, so a second tap is a second
-  // request as well as a second page. Found by the push-site census rather
-  // than by the audit in #244, which did not reach this file.
   void _openApp(AppCard app) {
-    pushPage(
-      context,
-      (_) => AppDetailPage(
-        alias: app.alias,
-        controller: _ctrl,
-        knownCategory: _ctrl.categoryFor(app),
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AppDetailPage(
+          alias: app.alias,
+          controller: _ctrl,
+          knownCategory: _ctrl.categoryFor(app),
+        ),
       ),
     );
   }
@@ -206,21 +202,9 @@ class _CatalogViewState extends State<CatalogView> {
     }
     if (_managerHandoff) return;
     _managerHandoff = true;
-    // A catalogue that could not be reached resolves to manager-only, which
-    // on screen is indistinguishable from a firmware the catalogue does not
-    // serve - so the user was told their Flipper was the problem when the
-    // network was. The flag has existed all along and only Settings -> Apps
-    // read it. #112.
-    final offline = AppsBackend.instance.catalogOffline;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (offline && mounted) {
-        context.showNotification(
-          context.l10n.appsCatalogUnreachable,
-          type: QNotificationType.warning,
-        );
-      }
-      widget.onOpenManager?.call();
-    });
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => widget.onOpenManager?.call(),
+    );
   }
 
   Widget _buildForMode(BuildContext context) {
@@ -237,13 +221,10 @@ class _CatalogViewState extends State<CatalogView> {
     final colors = context.appColors;
     return RefreshIndicator(
       color: colors.accent,
-      // This one already returned its work; what it did not have is a
-      // handler. `RefreshIndicator` does not catch a rejected `onRefresh`, so
-      // a failed category load reached the zone as `[uncaught]`. #23
-      onRefresh: () => guarded('[AppsCatalog] pull to refresh', () async {
+      onRefresh: () async {
         await _ctrl.loadCategories();
         await _ctrl.refresh();
-      }),
+      },
       child: CustomScrollView(
         controller: _scroll,
         physics: const AlwaysScrollableScrollPhysics(),

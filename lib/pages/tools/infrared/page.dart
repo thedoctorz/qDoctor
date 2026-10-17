@@ -4,38 +4,29 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../../services/localization/l10n.dart';
 import '../../../theme/theme.dart';
 
-import 'package:qunleashed/components/appbar.dart';
-import 'package:qunleashed/components/format.dart';
-import 'package:qunleashed/components/icon.dart';
-import 'package:qunleashed/theme/colors/category.dart';
+import 'package:doctormobile/components/appbar.dart';
+import 'package:doctormobile/components/format.dart';
+import 'package:doctormobile/components/icon.dart';
+import 'package:doctormobile/theme/colors/category.dart';
 
-import '../../../components/navigation.dart';
 import '../../../components/notification.dart';
 import 'controller.dart';
 import 'file_page.dart';
 import 'models.dart';
 import 'settings_dialog.dart';
 import 'widgets/ir_search_field.dart';
-import '../../devices/device_scope.dart';
-
-import 'package:flipperlib/flipperlib.dart';
 
 const _infraredAsset = 'assets/ic/fileformat/ir.svg';
 
 class IrLibPage extends StatefulWidget {
-  const IrLibPage({super.key, required this.client});
-
-  /// The Flipper a send from this library goes to. Required rather than
-  /// defaulted: every route into here is built with a context that has a
-  /// DeviceScope above it. ADR 0002.
-  final FlipperClient client;
+  const IrLibPage({super.key});
 
   @override
   State<IrLibPage> createState() => _IrLibPageState();
 }
 
 class _IrLibPageState extends State<IrLibPage> {
-  late final IrLibController _ctrl = IrLibController(client: widget.client);
+  final IrLibController _ctrl = IrLibController();
   final TextEditingController _searchCtrl = TextEditingController();
 
   @override
@@ -76,14 +67,11 @@ class _IrLibPageState extends State<IrLibPage> {
       );
       return;
     }
-    // Only the file branch, and the directory one is not covered rather than
-    // not affected: `openPath` re-lists, and the cache it can short-circuit on
-    // is not populated until the first listing lands, so a second tap on a
-    // folder does fetch again. It replaces the view instead of stacking on it,
-    // which is why it is the lesser half and why a push guard cannot answer it
-    // - the page is still on top. It wants what the file manager's listing got
-    // and has not had it. #244.
-    pushPage(context, (_) => IrLibFilePage(controller: _ctrl, entry: entry));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => IrLibFilePage(controller: _ctrl, entry: entry),
+      ),
+    );
   }
 
   @override
@@ -101,7 +89,6 @@ class _IrLibPageState extends State<IrLibPage> {
           return Scaffold(
             backgroundColor: colors.background,
             appBar: QPageAppBar(
-              client: DeviceScope.of(context).client,
               title: _ctrl.title,
               backgroundColor: colors.accent,
               foregroundColor: colors.onAccent,

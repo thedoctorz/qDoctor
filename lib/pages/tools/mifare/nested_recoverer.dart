@@ -1,8 +1,9 @@
 import 'dart:ffi';
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
-import '../../../services/native.dart';
+import 'mifare_native.dart';
 import 'nested_models.dart';
 
 abstract class NestedRecoverer {
@@ -48,16 +49,14 @@ class NativeNestedRecoverer implements NestedRecoverer {
       second.nt,
       second.ks,
     );
-    return spawnAttackIsolate(_recoverInIsolate, payload);
+    return Isolate.run(() => _recoverInIsolate(payload));
   }
 
   static BigInt? _recoverInIsolate(_RecoverPayload p) {
-    final recover = lookupNativeFunction(
-      () => openMifareNativeLibrary()
-          .lookupFunction<_RecoverNative, _RecoverDart>(
-            'qunleashed_nested_recover_key',
-          ),
-    );
+    final recover = openMifareNativeLibrary()
+        .lookupFunction<_RecoverNative, _RecoverDart>(
+          'qunleashed_nested_recover_key',
+        );
     final found = calloc<Int32>();
     try {
       final key = recover(p.uid, p.nt0, p.ks0, p.nt1, p.ks1, 1, found);

@@ -4,12 +4,9 @@ import 'dart:io' as io;
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../http/app_http.dart';
-import '../logging.dart';
-import '../settings/persist.dart';
 import '../localization/l10n.dart';
 
 /// The builder address is public; only the signing key is a secret, so the
@@ -67,12 +64,12 @@ class RemoteBuildService {
     required this.serverUrl,
     required this.sharedKey,
     this.pollInterval = Duration.zero,
-    this._clientId,
-  });
+    String? clientId,
+  }) : _clientId = clientId;
 
   static final RemoteBuildService instance = RemoteBuildService._();
 
-  static const String userAgent = 'qUnleashed';
+  static const String userAgent = 'DoctorMobile';
   static const String _clientIdPrefsKey = 'remote_build_client_id';
 
   final String serverUrl;
@@ -160,7 +157,7 @@ class RemoteBuildService {
     }
     _activeAlias = alias;
     try {
-      final clientId = await ensureClientId();
+      final clientId = await _ensureClientId();
       var status = await _postJson('/api/v1/builds', clientId, {
         'bundle_url': bundleUrl,
         'alias': alias,
@@ -253,12 +250,7 @@ class RemoteBuildService {
       ).forEach(request.headers.set);
       final response = await request.close();
       await response.drain<void>();
-    } catch (e) {
-      // The build carries on at the other end. Nothing here is waiting on the
-      // cancel - it is sent as the caller walks away - so what is lost is the
-      // only trace that a job is still running on a server nobody is watching.
-      LogService.warn('[RemoteBuild] could not cancel $id: $e');
-    }
+    } catch (_) {}
   }
 
   Future<Map<String, dynamic>> _postJson(
@@ -299,19 +291,7 @@ class RemoteBuildService {
     try {
       final decoded = jsonDecode(text);
       if (decoded is Map<String, dynamic>) return decoded;
-      // Read, and not what was asked for. A different shape from a server
-      // that has moved on is not the same fault as a proxy's error page, and
-      // the message the user gets cannot tell them apart.
-      LogService.warn(
-        '[RemoteBuild] unreadable response: expected an object, '
-        'got ${decoded.runtimeType}',
-      );
-    } catch (e) {
-      // The user is told: the throw below is a surface. What was missing is
-      // why - a proxy's HTML error page and a server that changed its shape
-      // read identically from the message alone.
-      LogService.warn('[RemoteBuild] unreadable response: $e');
-    }
+    } catch (_) {}
     throw RemoteBuildException(l10n.remoteUnexpectedResponse);
   }
 
@@ -322,12 +302,7 @@ class RemoteBuildService {
       if (decoded is Map<String, dynamic>) {
         detail = decoded['detail'] as String? ?? '';
       }
-    } catch (e) {
-      // The status code still answers the user. This is the server's own
-      // account of the refusal, and losing it turns "why did the build fail"
-      // into a guess - once per failed request, so it cannot flood.
-      LogService.warn('[RemoteBuild] error body unreadable: $e');
-    }
+    } catch (_) {}
     return switch (statusCode) {
       400 =>
         detail.isNotEmpty
@@ -379,63 +354,19 @@ class RemoteBuildService {
     };
   }
 
-  /// The id that identifies this install to the build server, remembered
-  /// across launches when the store will take it.
-  ///
-  /// Every step is best effort, and the whole function is on the path that
-  /// signs every remote build request: `build()` has no catch, so anything
-  /// thrown here reached the user as the stated reason their firmware build
-  /// failed - an error about preferences. Reading was the likelier of the two
-  /// to throw and was the one left unguarded, because `getInstance` is what a
-  /// store that will not open fails at.
-  ///
-  /// Not [persistSetting], for the same reason `KnownDevices` is not: the
-  /// level is the site's own call and that function fixes it at warn. Nothing
-  /// is lost when this write does not land - the id is returned either way
-  /// and serves the session - so there is nothing for anyone to do about it,
-  /// which is `caught` rather than a warning somebody should look at. The
-  /// reason is carried out to one call for the same reason that function
-  /// does it: the line's one literal has one home.
-  ///
-  /// `Random.secure()` is the one step outside the guard. It throws only
-  /// where the platform has no secure source at all, which none of the six
-  /// targets is, and a build signed with a predictable id is not a better
-  /// answer than failing.
-  ///
-  /// Public only so a test can reach it: every test that gets as far as
-  /// `build()` passes `clientId:`, so nothing exercised the path below until
-  /// this stopped being private. `build()` calls it from the same library,
-  /// where `@visibleForTesting` does not complain.
-  @visibleForTesting
-  Future<String> ensureClientId() async {
+  Future<String> _ensureClientId() async {
     final existing = _clientId;
     if (existing != null && existing.isNotEmpty) return existing;
-
-    final random = Random.secure();
-    final fresh = List.generate(
-      16,
-      (_) => random.nextInt(256),
-    ).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-    String? reason;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final stored = prefs.getString(_clientIdPrefsKey);
-      if (stored != null && stored.isNotEmpty) return _clientId = stored;
-      if (!await prefs.setString(_clientIdPrefsKey, fresh)) {
-        // The same words `persistSetting` and `KnownDevices` use, so one
-        // grep finds every store that declined a write.
-        reason = 'the store refused the write';
-      }
-    } catch (e, st) {
-      reason = LogService.describe(e, st);
+    final prefs = await SharedPreferences.getInstance();
+    var id = prefs.getString(_clientIdPrefsKey);
+    if (id == null || id.isEmpty) {
+      final random = Random.secure();
+      id = List.generate(
+        16,
+        (_) => random.nextInt(256),
+      ).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      await prefs.setString(_clientIdPrefsKey, id);
     }
-    if (reason != null) {
-      LogService.caught(
-        '[RemoteBuild] the client id was not remembered: $reason; '
-        'this session uses a fresh one',
-      );
-    }
-    return _clientId = fresh;
+    return _clientId = id;
   }
 }

@@ -4,15 +4,14 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../../services/localization/l10n.dart';
 import '../../../theme/theme.dart';
 
-import 'package:qunleashed/components/appbar.dart';
-import 'package:qunleashed/components/icon.dart';
-import 'package:qunleashed/theme/colors/category.dart';
+import 'package:doctormobile/components/appbar.dart';
+import 'package:doctormobile/components/icon.dart';
+import 'package:doctormobile/theme/colors/category.dart';
 
 import '../../../components/notification.dart';
 import 'backend/infrared_backend_api.dart';
 import 'backend/infrared_backend_models.dart';
 import 'ir_content_page.dart';
-import '../../devices/device_scope.dart';
 
 const _infraredAsset = 'assets/ic/fileformat/ir.svg';
 
@@ -21,37 +20,21 @@ class IrInfraredsPage extends StatefulWidget {
     super.key,
     required this.category,
     required this.brand,
-    this.api,
   });
 
   final DeviceCategory category;
   final BrandModel brand;
-
-  /// The backend, for a test that needs to hold a fetch open. ADR 0002 asks
-  /// for this to be a required parameter; it is optional because the two pages
-  /// that push this one would both have to take one to pass it down, and that
-  /// is a change to make on purpose rather than in a bug fix.
-  final InfraredBackendApi? api;
 
   @override
   State<IrInfraredsPage> createState() => _IrInfraredsPageState();
 }
 
 class _IrInfraredsPageState extends State<IrInfraredsPage> {
-  late final InfraredBackendApi _api = widget.api ?? InfraredBackendApi();
+  final InfraredBackendApi _api = InfraredBackendApi();
   bool _loading = true;
   String? _error;
   List<IfrFileModel> _files = const [];
-
-  /// The files whose content is being fetched.
-  ///
-  /// A set and not the single `int?` slot this was: the guard allows a
-  /// *different* file to be fetched meanwhile, which is the path that defeats
-  /// one slot. Tap A, tap B while A is out, and A's completion clears the slot
-  /// while B is still in flight - B's tile re-enables and B can be opened
-  /// twice over. The error path is the reachable one, since a failed fetch
-  /// leaves the whole list on screen. #244.
-  final Set<int> _fetching = {};
+  int? _fetchingId;
 
   @override
   void initState() {
@@ -90,21 +73,13 @@ class _IrInfraredsPageState extends State<IrInfraredsPage> {
   }
 
   Future<void> _open(IfrFileModel f) async {
-    // The tile is disabled while its own fetch runs, which is the call-site
-    // half of this repository's idiom and was all this had. The handler half
-    // closes the rest: a rebuild is only scheduled by setState, so two
-    // activations before it lands both see an enabled tile, and this awaits a
-    // backend fetch before pushing.
-    if (_fetching.contains(f.id)) return;
-    setState(() => _fetching.add(f.id));
+    setState(() => _fetchingId = f.id);
     try {
       final content = await _api.getKeyContent(f.id);
       if (!mounted) return;
-      final client = DeviceScope.of(context).client;
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => IrContentPage(
-            client: client,
             fileName: f.fileName,
             subtitle: context.l10n.irBreadcrumb(
               widget.category.displayName,
@@ -121,10 +96,7 @@ class _IrInfraredsPageState extends State<IrInfraredsPage> {
         type: QNotificationType.error,
       );
     } finally {
-      // Removed whatever happened, and outside setState when the State has
-      // gone: a file left in the set would wedge every later open of it.
-      _fetching.remove(f.id);
-      if (mounted) setState(() {});
+      if (mounted) setState(() => _fetchingId = null);
     }
   }
 
@@ -134,7 +106,6 @@ class _IrInfraredsPageState extends State<IrInfraredsPage> {
     return Scaffold(
       backgroundColor: colors.background,
       appBar: QPageAppBar(
-        client: DeviceScope.of(context).client,
         title: widget.brand.name,
         backgroundColor: colors.accent,
         foregroundColor: colors.onAccent,
@@ -170,7 +141,7 @@ class _IrInfraredsPageState extends State<IrInfraredsPage> {
         separatorBuilder: (_, _) => const SizedBox(height: 6),
         itemBuilder: (context, i) {
           final f = _files[i];
-          final fetching = _fetching.contains(f.id);
+          final fetching = _fetchingId == f.id;
           return Material(
             color: colors.card,
             borderRadius: BorderRadius.circular(12),

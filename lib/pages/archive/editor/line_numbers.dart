@@ -43,9 +43,11 @@ class EditorLineNumbers extends LeafRenderObjectWidget {
 class RenderEditorLineNumbers extends RenderBox {
   RenderEditorLineNumbers({
     required CodeLineEditingController controller,
-    required this._notifier,
-    required this._document,
+    required CodeIndicatorValueNotifier notifier,
+    required EditorDocument document,
   }) : _controller = controller,
+       _notifier = notifier,
+       _document = document,
        _lineCount = controller.lineCount;
 
   static final Paint _background = Paint()..color = kEditorGutterBackground;

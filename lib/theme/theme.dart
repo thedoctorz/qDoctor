@@ -1,12 +1,11 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../services/settings/persist.dart';
+import 'swipe_back.dart';
 
 import '../components/config.dart';
 import '../services/localization/l10n.dart';
-import '../services/logging.dart';
-import '../services/prefs_reader.dart';
 
 enum QThemeMode {
   firmware,
@@ -70,26 +69,8 @@ class QAppThemeController extends ChangeNotifier with WidgetsBindingObserver {
       firmware.shortName.toLowerCase() == 'unlshd';
 
   Future<void> loadThemeMode() async {
-    final PrefsReader reader;
-    try {
-      reader = PrefsReader(await SharedPreferences.getInstance());
-    } catch (e, st) {
-      // `_initCore` awaits this, and both entry points await that: `main`
-      // ahead of `runApp`, `widgetMain` with no UI at all. So a rejection
-      // here is not a theme that falls back - it is an app that never
-      // appears, or a widget engine whose link keeper never comes up.
-      //
-      // installUncaughtHandlers would still record the error - and now that
-      // ADR 0013 §1 has made Sentry the only channel, it would even be
-      // reported. What it would not carry is which load failed: an uncaught
-      // rejection arrives as `[uncaught]` with nothing naming the operation,
-      // which is the same argument `guarded` makes. Caught here, it carries
-      // its area. #124.
-      LogService.warn('[AppTheme] load failed: ${LogService.describe(e, st)}');
-      return;
-    }
-    final raw = reader.orNull<String>(_prefThemeMode);
-    reader.report('[AppTheme]');
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefThemeMode);
     if (raw == null) return;
     for (final mode in QThemeMode.values) {
       if (mode.name == raw) {
@@ -106,10 +87,8 @@ class QAppThemeController extends ChangeNotifier with WidgetsBindingObserver {
     if (mode == _themeMode) return;
     _themeMode = mode;
     notifyListeners();
-    await persistSetting(
-      _prefThemeMode,
-      (prefs) => prefs.setString(_prefThemeMode, mode.name),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefThemeMode, mode.name);
   }
 
   @override
@@ -117,22 +96,8 @@ class QAppThemeController extends ChangeNotifier with WidgetsBindingObserver {
     if (_themeMode == QThemeMode.system) notifyListeners();
   }
 
-  /// Moves the app onto [firmware].
-  ///
-  /// The entry must be one of the configured ones: the firmware carousel
-  /// finds its page by looking the `shortName` up in that config, and an
-  /// entry that is not there has no page. `FirmwareCard` notices and writes a
-  /// configured entry back over it, so the damage is bounded - but only
-  /// because it checks, which is not something to rely on.
-  ///
-  /// Asserted rather than rejected, because both writers today pick out of
-  /// [config] and there is nothing better to do where asserts are off.
   void setActiveFirmware(FirmwareEntry? firmware) {
     if (firmware == null) return;
-    assert(
-      _config.firmwares.any((e) => e.shortName == firmware.shortName),
-      'active firmware "${firmware.shortName}" is not in the config',
-    );
     if (identical(_activeFirmware, firmware)) return;
     if (_activeFirmware.shortName == firmware.shortName) return;
     _activeFirmware = firmware;
@@ -481,6 +446,17 @@ ThemeData buildAppTheme(Brightness brightness, Color accent) {
       ),
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(color: colors.accent),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {
+        TargetPlatform.iOS: SwipeBackPageTransitionsBuilder(
+          CupertinoPageTransitionsBuilder(),
+        ),
+        TargetPlatform.android: SwipeBackPageTransitionsBuilder(
+          FadeForwardsPageTransitionsBuilder(),
+        ),
+        TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+      },
+    ),
     extensions: [colors],
   );
 }

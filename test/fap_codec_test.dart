@@ -2,14 +2,14 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/components/codec/fap/elf.dart';
-import 'package:qunleashed/components/codec/fap/info.dart';
-import 'package:qunleashed/components/codec/fap/details.dart';
-import 'package:qunleashed/components/codec/fap/assets.dart';
-import 'package:qunleashed/components/codec/fap/manifest.dart';
-import 'package:qunleashed/pages/apps/data/models/installed_app.dart';
-import 'package:qunleashed/components/fap_facts.dart';
-import 'package:qunleashed/theme/theme.dart';
+import 'package:doctormobile/components/codec/fap/elf.dart';
+import 'package:doctormobile/components/codec/fap/info.dart';
+import 'package:doctormobile/components/codec/fap/details.dart';
+import 'package:doctormobile/components/codec/fap/assets.dart';
+import 'package:doctormobile/components/codec/fap/manifest.dart';
+import 'package:doctormobile/pages/apps/data/models/installed_app.dart';
+import 'package:doctormobile/components/fap_facts.dart';
+import 'package:doctormobile/theme/theme.dart';
 
 void main() {
   group('FapInfo.parse', () {

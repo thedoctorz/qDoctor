@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../../services/guarded.dart';
 import '../../../components/cardlist.dart';
 import '../../../services/localization/l10n.dart';
 import '../../../theme/theme.dart';
@@ -23,7 +22,7 @@ class _MapSettingsPageState extends State<MapSettingsPage> {
   @override
   void initState() {
     super.initState();
-    unawaited(guarded('[Settings/Map] load settings', _settings.load));
+    unawaited(_settings.load());
   }
 
   @override
@@ -86,14 +85,21 @@ class _MapSettingsPageState extends State<MapSettingsPage> {
   }
 
   Future<void> _selectProvider(MapTileProvider provider) async {
+    final previous = _provider;
     await _settings.setProvider(provider);
     if (!mounted) return;
     if (provider.isCustom && _settings.customUrl.isEmpty) {
       await _editCustomUrl();
+      if (_settings.customUrl.isEmpty && previous.id != provider.id) {
+        await _settings.setProvider(previous);
+      }
       return;
     }
     if (provider.needsKey && !_settings.hasKey(provider)) {
       await _editKey(provider);
+      if (!_settings.hasKey(provider) && previous.id != provider.id) {
+        await _settings.setProvider(previous);
+      }
     }
   }
 
@@ -183,6 +189,86 @@ class _MapSettingsPageState extends State<MapSettingsPage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _engineGroup(QAppColors colors) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: kGroupedHorizontalPadding,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _GroupTitle(context.l10n.mapEngineSection),
+          GroupedCard(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+            child: Row(
+              children: [
+                for (final value in MapEngine.values) ...[
+                  Expanded(
+                    child: _ChoiceTile(
+                      icon: switch (value) {
+                        MapEngine.system => Icons.map_outlined,
+                        MapEngine.tiles => Icons.grid_view_outlined,
+                      },
+                      label: value.label,
+                      selected: _settings.engine == value,
+                      colors: colors,
+                      onTap: () => _settings.setEngine(value),
+                    ),
+                  ),
+                  if (value != MapEngine.values.last) const SizedBox(width: 10),
+                ],
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
+            child: Text(
+              _settings.engine.description,
+              style: TextStyle(fontSize: 12, color: colors.textMuted),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _systemStyleGroup(QAppColors colors) {
+    return GroupedCardList<AppleMapStyle>(
+      title: context.l10n.mapSystemStyle,
+      items: AppleMapStyle.values,
+      onTap: (value) =>
+          () => _settings.setSystemStyle(value),
+      itemBuilder: (context, value) {
+        final selected = _settings.systemStyle == value;
+        return Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    value.label,
+                    style: TextStyle(
+                      color: colors.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value.description,
+                    style: TextStyle(fontSize: 12, color: colors.textMuted),
+                  ),
+                ],
+              ),
+            ),
+            if (selected) Icon(Icons.check, size: 18, color: colors.accent),
+          ],
+        );
+      },
     );
   }
 
@@ -407,90 +493,99 @@ class _MapSettingsPageState extends State<MapSettingsPage> {
           body: ListView(
             padding: const EdgeInsets.symmetric(vertical: 10),
             children: [
+              if (MapEngine.systemAvailable) ...[
+                _engineGroup(colors),
+                const SizedBox(height: 14),
+              ],
               _appearanceGroup(colors),
-              const SizedBox(height: 14),
-              GroupedCardList<MapTileProvider>(
-                title: context.l10n.mapGroupTileSource,
-                items: mapTileProviders(context.l10n),
-                onTap: (value) =>
-                    () => _selectProvider(value),
-                itemBuilder: _providerRow,
-              ),
-              // Styles for the mode the map is actually in; in auto both sets
-              // matter, because the map follows the app theme.
-              if (!provider.isCustom) ...[
-                if (auto || !_mapDark) ...[
-                  const SizedBox(height: 14),
-                  _styleStrip(
-                    colors,
-                    title: auto
-                        ? context.l10n.mapGroupDesignLight(provider.label)
-                        : context.l10n.mapGroupStyle(provider.label),
-                    designs: provider.lightDesigns,
-                  ),
-                ],
-                if (auto || _mapDark) ...[
-                  const SizedBox(height: 14),
-                  _styleStrip(
-                    colors,
-                    title: auto
-                        ? context.l10n.mapGroupDesignDark(provider.label)
-                        : context.l10n.mapGroupStyle(provider.label),
-                    designs: provider.darkDesigns,
-                  ),
-                ],
-              ],
-              if (provider.isCustom) ...[
+              if (_settings.useSystemMap) ...[
                 const SizedBox(height: 14),
-                GroupedCardList<_Row>(
-                  title: context.l10n.mapGroupCustomSource,
-                  items: _customRows(context),
-                  onTap: (row) => row.onTap,
-                  itemBuilder: (context, row) => row.child,
+                _systemStyleGroup(colors),
+              ] else ...[
+                const SizedBox(height: 14),
+                GroupedCardList<MapTileProvider>(
+                  title: context.l10n.mapGroupTileSource,
+                  items: mapTileProviders(context.l10n),
+                  onTap: (value) =>
+                      () => _selectProvider(value),
+                  itemBuilder: _providerRow,
                 ),
-              ],
-              if (provider.needsKey ||
-                  provider.isCustom ||
-                  provider.id == kCartoProviderId) ...[
-                const SizedBox(height: 14),
-                GroupedCardList<_Row>(
-                  title: context.l10n.mapGroupKeys,
-                  items: _keyRows(context),
-                  onTap: (row) => row.onTap,
-                  itemBuilder: (context, row) => row.child,
-                ),
-              ],
-              if (config.retina || provider.retina) ...[
-                const SizedBox(height: 14),
-                GroupedCardList<_Row>(
-                  title: context.l10n.mapGroupTileDetail,
-                  items: [
-                    _Row(
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              context.l10n.mapRetinaTiles,
-                              style: TextStyle(
-                                color: colors.textPrimary,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                          Switch(
-                            value: _settings.retina,
-                            onChanged: _settings.setRetina,
-                            activeTrackColor: colors.accent,
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                          ),
-                        ],
-                      ),
+                // Styles for the mode the map is actually in; in auto both sets
+                // matter, because the map follows the app theme.
+                if (!provider.isCustom) ...[
+                  if (auto || !_mapDark) ...[
+                    const SizedBox(height: 14),
+                    _styleStrip(
+                      colors,
+                      title: auto
+                          ? context.l10n.mapGroupDesignLight(provider.label)
+                          : context.l10n.mapGroupStyle(provider.label),
+                      designs: provider.lightDesigns,
                     ),
                   ],
-                  itemBuilder: (context, row) => row.child,
-                ),
+                  if (auto || _mapDark) ...[
+                    const SizedBox(height: 14),
+                    _styleStrip(
+                      colors,
+                      title: auto
+                          ? context.l10n.mapGroupDesignDark(provider.label)
+                          : context.l10n.mapGroupStyle(provider.label),
+                      designs: provider.darkDesigns,
+                    ),
+                  ],
+                ],
+                if (provider.isCustom) ...[
+                  const SizedBox(height: 14),
+                  GroupedCardList<_Row>(
+                    title: context.l10n.mapGroupCustomSource,
+                    items: _customRows(context),
+                    onTap: (row) => row.onTap,
+                    itemBuilder: (context, row) => row.child,
+                  ),
+                ],
+                if (provider.needsKey ||
+                    provider.isCustom ||
+                    provider.id == kCartoProviderId) ...[
+                  const SizedBox(height: 14),
+                  GroupedCardList<_Row>(
+                    title: context.l10n.mapGroupKeys,
+                    items: _keyRows(context),
+                    onTap: (row) => row.onTap,
+                    itemBuilder: (context, row) => row.child,
+                  ),
+                ],
+                if (config.retina || provider.retina) ...[
+                  const SizedBox(height: 14),
+                  GroupedCardList<_Row>(
+                    title: context.l10n.mapGroupTileDetail,
+                    items: [
+                      _Row(
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                context.l10n.mapRetinaTiles,
+                                style: TextStyle(
+                                  color: colors.textPrimary,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            Switch(
+                              value: _settings.retina,
+                              onChanged: _settings.setRetina,
+                              activeTrackColor: colors.accent,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    itemBuilder: (context, row) => row.child,
+                  ),
+                ],
               ],
               const SizedBox(height: 14),
               GroupedCardList<_Row>(

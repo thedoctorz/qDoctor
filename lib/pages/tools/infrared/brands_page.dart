@@ -3,14 +3,12 @@ import 'package:flutter/material.dart';
 import '../../../services/localization/l10n.dart';
 import '../../../theme/theme.dart';
 
-import 'package:qunleashed/components/appbar.dart';
-import 'package:qunleashed/components/navigation.dart';
+import 'package:doctormobile/components/appbar.dart';
 
 import 'backend/infrared_backend_api.dart';
 import 'backend/infrared_backend_models.dart';
 import 'infrareds_page.dart';
 import 'widgets/ir_search_field.dart';
-import '../../devices/device_scope.dart';
 
 class IrBrandsPage extends StatefulWidget {
   const IrBrandsPage({super.key, required this.category});
@@ -67,11 +65,10 @@ class _IrBrandsPageState extends State<IrBrandsPage> {
   }
 
   void _open(BrandModel b) {
-    // pushPage, not push: the page fetches this brand's files in initState, so
-    // a second tap is a second request as well as a second page. #244.
-    pushPage(
-      context,
-      (_) => IrInfraredsPage(category: widget.category, brand: b),
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => IrInfraredsPage(category: widget.category, brand: b),
+      ),
     );
   }
 
@@ -87,7 +84,6 @@ class _IrBrandsPageState extends State<IrBrandsPage> {
     return Scaffold(
       backgroundColor: colors.background,
       appBar: QPageAppBar(
-        client: DeviceScope.of(context).client,
         title: widget.category.displayName,
         backgroundColor: colors.accent,
         foregroundColor: colors.onAccent,

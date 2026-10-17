@@ -1,16 +1,18 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/components/config.dart';
-import 'package:qunleashed/pages/devices/controllers/firmware.dart';
-import 'package:qunleashed/pages/devices/firmware/directory.dart';
-import 'package:qunleashed/pages/devices/firmware/repository.dart';
-import 'package:qunleashed/pages/devices/firmware/update_settings.dart';
+import 'package:doctormobile/components/config.dart';
+import 'package:doctormobile/pages/devices/controllers/firmware.dart';
+import 'package:doctormobile/pages/devices/firmware/directory.dart';
+import 'package:doctormobile/pages/devices/firmware/repository.dart';
+import 'package:doctormobile/pages/devices/firmware/update_settings.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 FirmwareDirectoryChannel channel(String id) => FirmwareDirectoryChannel(
   id: id,
   title: id,
   description: '',
-  versions: const [FirmwareVersion(version: '1.0.0', changelog: '', files: [])],
+  versions: const [
+    FirmwareVersion(version: '1.0.0', changelog: '', timestamp: 0, files: []),
+  ],
 );
 
 /// Runs [body] once the controller has read its stored choices.
@@ -40,12 +42,6 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues(const {});
     settings.reset();
-    // The repository records which firmwares failed, and that record now
-    // outlives a test: a case that lets the controller prefetch without a
-    // seeded directory leaves both marked, and the next case reads those
-    // through fetchStateFor. #118 added it; clearing the parser caches alone
-    // no longer leaves a clean slate.
-    FirmwareRepository.instance.reset();
     for (final entry in QAppConfig.firmware.firmwares) {
       parserForEntry(entry).clearCache();
     }
@@ -59,7 +55,10 @@ void main() {
   /// settings are read, which quietly pre-satisfies assertions that the
   /// default channel is release.
   void giveChannels(List<String> ids, {FirmwareEntry? entry}) {
-    for (final f in entry == null ? QAppConfig.firmware.firmwares : [entry]) {
+    final entries = entry == null
+        ? QAppConfig.firmware.firmwares.where((f) => !f.localFile)
+        : [entry];
+    for (final f in entries) {
       parserForEntry(f).seedCache(
         FirmwareDirectory(channels: [for (final id in ids) channel(id)]),
       );
@@ -85,6 +84,15 @@ void main() {
         // Every firmware, not just the first: the fallback loops them all, and
         // asserting only on the first would let it be narrowed unnoticed.
         for (final entry in QAppConfig.firmware.firmwares) {
+          if (entry.localFile) {
+            expect(
+              fw.selectedChannelId(entry),
+              kCustomFirmwareChannelId,
+              reason: entry.shortName,
+            );
+            expect(fw.channelsFor(entry), isEmpty, reason: entry.shortName);
+            continue;
+          }
           expect(
             fw.selectedChannelId(entry),
             'release',
@@ -112,15 +120,12 @@ void main() {
       });
     });
 
-    // The custom channel is the one the fallback treats as "nobody has chosen
-    // yet", so a remembered choice of it has to be marked as a real choice or
-    // it is silently replaced on every launch.
-    test('a remembered custom channel is not overridden', () async {
+    test('a remembered custom channel falls back to release', () async {
       giveChannels(['release', 'development']);
       await alreadyChose(channel: kCustomFirmwareChannelId);
 
       await withController((fw) async {
-        expect(fw.selectedChannelId(unleashed), kCustomFirmwareChannelId);
+        expect(fw.selectedChannelId(unleashed), 'release');
       });
     });
 
@@ -159,7 +164,6 @@ void main() {
         expect(fw.channelsFor(unleashed).map((c) => c.id), [
           'release',
           'development',
-          kCustomFirmwareChannelId,
         ]);
       });
     });

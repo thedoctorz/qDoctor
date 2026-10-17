@@ -1,4 +1,3 @@
-import '../../../services/guarded.dart';
 import '../../../services/localization/l10n.dart';
 
 import 'dart:async';
@@ -9,8 +8,6 @@ import 'package:dartufbt/dartufbt.dart';
 import 'package:flipperlib/flipperlib.dart' hide File;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import '../../../services/settings/persist.dart';
 
 import '../../../components/codec/fap/info.dart';
 import '../../../services/progress_throttle.dart';
@@ -65,8 +62,6 @@ class FliblerRecentSource {
 class FliblerProjectController extends ChangeNotifier {
   FliblerProjectController({FlipperClient? client})
     : _client = client ?? FlipperOneClient().get();
-
-  static final FliblerProjectController instance = FliblerProjectController();
 
   final FlipperClient _client;
   final AssemblerController _assembler = AssemblerController.instance;
@@ -160,9 +155,7 @@ class FliblerProjectController extends ChangeNotifier {
     _kind = FliblerSourceKind.folder;
     _forget();
     notifyListeners();
-    unawaited(
-      guarded('[Flibler] remember last folder', () => _saveLastFolder(path)),
-    );
+    unawaited(_saveLastFolder(path));
   }
 
   void setRepo(String url) {
@@ -196,10 +189,8 @@ class FliblerProjectController extends ChangeNotifier {
   Future<void> _saveLastFolder(String path) async {
     if (path.isEmpty || path == _lastFolder) return;
     _lastFolder = path;
-    await persistSetting(
-      kFliblerLastFolderPrefsKey,
-      (prefs) => prefs.setString(kFliblerLastFolderPrefsKey, path),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(kFliblerLastFolderPrefsKey, path);
   }
 
   Future<void> removeRecent(FliblerRecentSource entry) async {
@@ -209,12 +200,10 @@ class FliblerProjectController extends ChangeNotifier {
   }
 
   Future<void> _saveRecent() async {
-    await persistSetting(
-      kFliblerRecentPrefsKey,
-      (prefs) => prefs.setStringList(kFliblerRecentPrefsKey, [
-        for (final entry in _recent) entry.encode(),
-      ]),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(kFliblerRecentPrefsKey, [
+      for (final entry in _recent) entry.encode(),
+    ]);
   }
 
   Future<void> _rememberSource() async {
@@ -259,11 +248,7 @@ class FliblerProjectController extends ChangeNotifier {
         'Loaded ${_app!.name.isEmpty ? _app!.appid : _app!.name}'
         '${_app!.fapAuthor.isEmpty ? '' : ' by ${_app!.fapAuthor}'}',
       );
-      // Guarded rather than bare: this sits inside the try below, and a
-      // rejection from it arrives after this body has returned - so the catch
-      // that sets `_error` never sees it and the zone gets an unlabelled
-      // [uncaught] instead. #23
-      unawaited(guarded('[Flibler] remember source', _rememberSource));
+      unawaited(_rememberSource());
       return true;
     } catch (e) {
       _error = '$e';
@@ -348,8 +333,6 @@ class FliblerProjectController extends ChangeNotifier {
     }
   }
 
-  /// Starting the app is what the user is waiting on, and it runs on whatever
-  /// Flipper is in front of them - no binding, and no queue to sit behind.
   Future<void> launchOnDevice() async {
     final path = targetPath;
     if (path.isEmpty) throw StateError(l10n.fliblerErrorNothingBuilt);
@@ -360,15 +343,7 @@ class FliblerProjectController extends ChangeNotifier {
     );
   }
 
-  /// Uploads the built artifacts, as one task.
-  ///
-  /// The directories it makes and every file it writes go to the Flipper it
-  /// started against, so switching devices mid-upload cannot leave half a
-  /// build on one and half on the other.
-  Future<bool> sendToDevice() =>
-      _client.runTask(FlipperRequestPriority.background, _sendToDevice);
-
-  Future<bool> _sendToDevice() async {
+  Future<bool> sendToDevice() async {
     final artifacts = deployable;
     if (artifacts.isEmpty || _uploading) return false;
     if (!deviceReady) {

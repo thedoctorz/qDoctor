@@ -29,11 +29,14 @@ class RemoteKeyboardListener extends StatefulWidget {
     required this.onHoldBegin,
     required this.onHoldEnd,
     required this.child,
+    this.enabled = true,
   });
 
   final void Function(RemoteButton) onHoldBegin;
   final void Function(RemoteButton) onHoldEnd;
   final Widget child;
+
+  final bool enabled;
 
   @override
   State<RemoteKeyboardListener> createState() => _RemoteKeyboardListenerState();
@@ -57,6 +60,7 @@ class _RemoteKeyboardListenerState extends State<RemoteKeyboardListener> {
   }
 
   KeyEventResult _onKey(KeyEvent event) {
+    if (!widget.enabled) return KeyEventResult.ignored;
     final button = _kKeyMap[event.logicalKey];
     if (button == null) return KeyEventResult.ignored;
 

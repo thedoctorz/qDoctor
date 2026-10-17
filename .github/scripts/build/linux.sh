@@ -2,11 +2,8 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-APP_NAME="qunleashed"
-# The asset version, which carries the channel suffix and build number on a
-# dev build so its filenames differ from the release of the same cycle.
-# Falls back to the numeric name, then to pubspec.
-VERSION_NAME="${QUNLEASHED_ASSET_VERSION:-${QUNLEASHED_VERSION_NAME:-}}"
+APP_NAME="doctormobile"
+VERSION_NAME="${DOCTORMOBILE_VERSION_NAME:-}"
 DIST_DIR="$ROOT_DIR/dist"
 
 if [[ -z "$VERSION_NAME" ]]; then
@@ -15,7 +12,7 @@ if [[ -z "$VERSION_NAME" ]]; then
 fi
 
 if [[ -z "$VERSION_NAME" ]]; then
-  echo "App version not found. Set QUNLEASHED_ASSET_VERSION or pubspec.yaml version." >&2
+  echo "App version not found. Set DOCTORMOBILE_VERSION_NAME or pubspec.yaml version." >&2
   exit 1
 fi
 
@@ -31,11 +28,7 @@ OUT_FILE="$DIST_DIR/${APP_NAME}_${VERSION_NAME}_linux_${TARGET_ARCH}"
 
 FLUTTER_BIN="${FLUTTER_BIN:-}"
 if [[ -z "$FLUTTER_BIN" ]]; then
-  if [[ -x "/home/apfx32/development/flutter/bin/flutter" ]]; then
-    FLUTTER_BIN="/home/apfx32/development/flutter/bin/flutter"
-  else
-    FLUTTER_BIN="$(command -v flutter || true)"
-  fi
+  FLUTTER_BIN="$(command -v flutter || true)"
 fi
 
 if [[ -z "$FLUTTER_BIN" || ! -x "$FLUTTER_BIN" ]]; then
@@ -130,7 +123,7 @@ mkdir -p "$DIST_DIR"
 
 echo "Using Flutter: $FLUTTER_BIN"
 echo "Building Linux release..."
-read -r -a FLUTTER_BUILD_ARGS <<< "${QUNLEASHED_FLUTTER_BUILD_ARGS:-}"
+read -r -a FLUTTER_BUILD_ARGS <<< "${DOCTORMOBILE_FLUTTER_BUILD_ARGS:-}"
 (cd "$ROOT_DIR" && "$FLUTTER_BIN" build linux --release "${FLUTTER_BUILD_ARGS[@]}")
 
 if [[ ! -x "$BUILD_DIR/$APP_NAME" ]]; then
@@ -304,9 +297,9 @@ cat > "$STUB" <<'STUB'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_NAME="qunleashed"
+APP_NAME="doctormobile"
 WORK_DIR="${TMPDIR:-/tmp}/${APP_NAME}-self-$$"
-MARKER="__QUNLEASHED_PAYLOAD_BELOW__"
+MARKER="__DOCTORMOBILE_PAYLOAD_BELOW__"
 
 cleanup() {
   local tmp_root="${TMPDIR:-/tmp}"
@@ -331,7 +324,7 @@ tail -n +"$ARCHIVE_LINE" "$0" | tar -xz -C "$WORK_DIR"
 chmod +x "$WORK_DIR/$APP_NAME"
 exec "$WORK_DIR/$APP_NAME" "$@"
 
-__QUNLEASHED_PAYLOAD_BELOW__
+__DOCTORMOBILE_PAYLOAD_BELOW__
 STUB
 
 cat "$STUB" "$ARCHIVE" > "$OUT_FILE"

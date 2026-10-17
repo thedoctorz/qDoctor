@@ -1,4 +1,3 @@
-import '../../../services/guarded.dart';
 import '../../../services/localization/l10n.dart';
 
 import 'dart:async';
@@ -45,23 +44,16 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
   InstallEngine get _engine => _backend.engine;
   UpdateRegistry get _updates => _backend.updates;
 
-  /// Whether the list on screen is short because nothing could be read,
-  /// rather than because there is nothing to read. A scan still running is
-  /// neither.
-  bool get _readFailed => !_device.scanning && _backend.manifests.failed;
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        unawaited(guarded('[AppsManager] first load', _primeAll));
-      }
+      if (mounted) unawaited(_primeAll());
     });
   }
 
   Future<void> _primeAll() async {
-    unawaited(guarded('[AppsManager] ensure index', _backend.ensureIndex));
+    unawaited(_backend.ensureIndex());
     await _device.prime();
     await _updates.ensureFresh();
   }
@@ -69,7 +61,11 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
   Future<void> _update(InstalledApp app) async {
     final card = _updates.cardForUid(app.uid);
     if (card == null) return;
-    await _engine.installOrUpdate(card);
+    final ok = await _engine.installOrUpdate(card);
+    if (!mounted) return;
+    final message = _engine.consumeFailure(card.alias);
+    if (ok || message == null) return;
+    context.showNotification(message, type: QNotificationType.error);
   }
 
   void _updateAll() {
@@ -116,7 +112,7 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
   void _onSort(String key) => setState(() => _sort.select(key));
 
   Future<void> _launch(InstalledApp app) =>
-      launchApp(context, () => _device.launch(app), target: app.path);
+      launchApp(context, () => _device.launch(app));
 
   Future<bool> _confirm(String title, String body) {
     return QConfirmDialog.show(context, title: title, message: body);
@@ -196,30 +192,21 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
             icon: Icons.restore,
             color: colors.accent,
             filled: true,
-            onTap: () => unawaited(
-              guarded('[AppsManager] restore', () => _restore(app)),
-            ),
+            onTap: () => unawaited(_restore(app)),
           ),
           AppActionEntry(
             label: ctx.l10n.appActionDeleteCopy,
             icon: Icons.sd_card_outlined,
             color: colors.danger,
             half: true,
-            onTap: () => unawaited(
-              guarded(
-                '[AppsManager] delete local copy',
-                () => _deleteLocal(app),
-              ),
-            ),
+            onTap: () => unawaited(_deleteLocal(app)),
           ),
           AppActionEntry(
             label: ctx.l10n.appActionUninstall,
             icon: Icons.delete_outline,
             color: colors.danger,
             half: true,
-            onTap: () => unawaited(
-              guarded('[AppsManager] uninstall', () => _uninstall(app)),
-            ),
+            onTap: () => unawaited(_uninstall(app)),
           ),
         ] else ...[
           if (updatable)
@@ -228,9 +215,7 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
               icon: Icons.system_update_alt,
               color: colors.success,
               filled: true,
-              onTap: () => unawaited(
-                guarded('[AppsManager] update', () => _update(app)),
-              ),
+              onTap: () => unawaited(_update(app)),
             ),
           AppActionEntry(
             label: ctx.l10n.commonOpen,
@@ -238,29 +223,21 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
             color: colors.accent,
             filled: !updatable,
             half: true,
-            onTap: () =>
-                unawaited(guarded('[AppsManager] launch', () => _launch(app))),
+            onTap: () => unawaited(_launch(app)),
           ),
           AppActionEntry(
             label: ctx.l10n.appActionRestore,
             icon: Icons.restore,
             color: colors.accent,
             half: true,
-            onTap: () => unawaited(
-              guarded('[AppsManager] restore', () => _restore(app)),
-            ),
+            onTap: () => unawaited(_restore(app)),
           ),
           AppActionEntry(
             label: ctx.l10n.appActionDeleteCopy,
             icon: Icons.sd_card_outlined,
             color: colors.danger,
             half: true,
-            onTap: () => unawaited(
-              guarded(
-                '[AppsManager] delete local copy',
-                () => _deleteLocal(app),
-              ),
-            ),
+            onTap: () => unawaited(_deleteLocal(app)),
           ),
           AppActionEntry(
             label: ctx.l10n.appActionUninstall,
@@ -268,9 +245,7 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
             color: colors.danger,
             filled: true,
             half: true,
-            onTap: () => unawaited(
-              guarded('[AppsManager] uninstall', () => _uninstall(app)),
-            ),
+            onTap: () => unawaited(_uninstall(app)),
           ),
         ],
       ],
@@ -319,31 +294,14 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
               ],
             ),
             actions: [
-              // The badge used to render only above zero, and a check that
-              // never finished leaves the count at zero - so a failure read
-              // as being up to date. It shows either way now, and a failed
-              // one offers the check again rather than an update of nothing.
-              // #112.
-              if (_updates.count > 0 || _updates.failed)
+              if (_updates.count > 0)
                 IconButton(
                   icon: Badge(
-                    label: Text(_updates.failed ? '!' : '${_updates.count}'),
-                    backgroundColor: _updates.failed
-                        ? Colors.amber.shade700
-                        : null,
+                    label: Text('${_updates.count}'),
                     child: const Icon(Icons.update, color: Colors.white),
                   ),
-                  tooltip: _updates.failed
-                      ? context.l10n.appsLoadFailed
-                      : context.l10n.managerUpdateAll,
-                  onPressed: _updates.failed
-                      ? () => unawaited(
-                          guarded(
-                            '[AppsManager] retry update check',
-                            () => _updates.refresh(force: true),
-                          ),
-                        )
-                      : _updateAll,
+                  tooltip: context.l10n.managerUpdateAll,
+                  onPressed: _updateAll,
                 ),
               IconButton(
                 icon: const Icon(Icons.extension, color: Colors.white),
@@ -430,12 +388,7 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
       sort: _sort,
       onSort: _onSort,
       header: header,
-      // Returns the work rather than starting it. `RefreshIndicator` holds
-      // its spinner until this future settles, and
-      // `() async => unawaited(...)` settles immediately - so the spinner used
-      // to vanish before the scan had begun. `guarded` completes when the task
-      // does and never rejects, which is also what the indicator wants. #23
-      onRefresh: () => guarded('[AppsManager] pull to refresh', _device.prime),
+      onRefresh: () async => unawaited(_device.prime()),
       rowBuilder: (app, cols) => _AppRow(
         key: ValueKey(app.path),
         app: app,
@@ -447,6 +400,8 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
                 app.fap,
                 deviceApi: _backend.deviceApi,
                 deviceTarget: _backend.deviceTarget,
+                minApiMajor: _backend.apiMajorWindow?.$1,
+                maxApiMajor: _backend.apiMajorWindow?.$2,
               )
             : null,
         action: _engine.actions[app.alias],
@@ -460,20 +415,16 @@ class _AppsManagerPageState extends State<AppsManagerPage> {
     return RefreshIndicator(
       color: header,
       displacement: 15,
-      onRefresh: () => guarded('[AppsManager] pull to refresh', _device.prime),
+      onRefresh: () async => unawaited(_device.prime()),
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           SizedBox(
             height: MediaQuery.of(context).size.height * 0.5,
-            // A read that came back short is not a Flipper with no apps on
-            // it, and this screen rendered the same thing for both. #112.
             child: ArchiveEmptyView(
-              icon: _readFailed ? Icons.cloud_off : Icons.apps,
+              icon: Icons.apps,
               title: _filtering
                   ? context.l10n.appsNothingMatches
-                  : _readFailed
-                  ? context.l10n.appsLoadFailed
                   : context.l10n.managerNoApps,
               subtitle: _filtering ? null : context.l10n.managerSyncHint,
             ),

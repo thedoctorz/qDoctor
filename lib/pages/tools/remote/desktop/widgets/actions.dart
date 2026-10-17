@@ -41,7 +41,7 @@ class RemoteActionSpec {
 List<RemoteActionSpec> buildRemoteActionSpecs({
   required GifRecordingState gifState,
   required int gifElapsedMs,
-  required bool justUnlocked,
+  required bool isLocked,
   required bool savingScreenshot,
   required AsyncCallback onCopy,
   required AsyncCallback onSave,
@@ -91,10 +91,10 @@ List<RemoteActionSpec> buildRemoteActionSpecs({
       onTap: onSave,
     ),
     RemoteActionSpec(
-      asset: justUnlocked
+      asset: isLocked
           ? 'assets/ic/action/unlock.svg'
           : 'assets/ic/action/lock.svg',
-      label: justUnlocked ? l10n.remoteUnlocked : l10n.remoteUnlock,
+      label: isLocked ? l10n.remoteUnlock : l10n.remoteLock,
       onTap: onUnlock,
     ),
     RemoteActionSpec(
@@ -111,7 +111,7 @@ class RemoteActions extends StatelessWidget {
     required this.size,
     required this.gifState,
     required this.gifElapsedMs,
-    required this.justUnlocked,
+    required this.isLocked,
     required this.savingScreenshot,
     required this.onCopy,
     required this.onSave,
@@ -125,7 +125,7 @@ class RemoteActions extends StatelessWidget {
   final Size size;
   final GifRecordingState gifState;
   final int gifElapsedMs;
-  final bool justUnlocked;
+  final bool isLocked;
   final bool savingScreenshot;
   final AsyncCallback onCopy;
   final AsyncCallback onSave;
@@ -138,7 +138,7 @@ class RemoteActions extends StatelessWidget {
   List<RemoteActionSpec> _specs() => buildRemoteActionSpecs(
     gifState: gifState,
     gifElapsedMs: gifElapsedMs,
-    justUnlocked: justUnlocked,
+    isLocked: isLocked,
     savingScreenshot: savingScreenshot,
     onCopy: onCopy,
     onSave: onSave,

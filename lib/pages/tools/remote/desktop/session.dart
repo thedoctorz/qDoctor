@@ -9,6 +9,7 @@ import '../../../../services/guarded.dart';
 import '../../../../services/logging.dart';
 import '../../../../services/rpc/desktop_lock.dart';
 import 'frame_decoder.dart';
+import 'input/keyboard_board.dart';
 import 'models/models.dart';
 import 'screenshot_encoder.dart';
 
@@ -17,36 +18,28 @@ const Duration _kUnlockedFlashDuration = Duration(seconds: 1);
 const Duration _kStopTimeout = Duration(seconds: 2);
 
 class RemoteSession extends ChangeNotifier {
-  /// The link this session talks over, for whoever needs to name it - the
-  /// page's title bar shows this device, not whatever the tree carries.
-  FlipperClient get client => _client;
-
-  RemoteSession({required this._client}) {
+  RemoteSession({FlipperClient? client})
+    : _client = client ?? FlipperOneClient().get() {
     _inputAvailable = _client.isConnected;
     _frameSub = _client.screenFrameStream().listen(_onFrame);
+    _focusSub = _client.inputFocusStream().listen(_onInputFocus);
     _statusSub = _client.desktopStatusStream().listen(_applyStatus);
     _connectionSub = _client.connectionStream.listen(_onConnectionState);
     DeviceInfoWatchService.instance.freeze();
-    unawaited(guarded('[Remote] start visuals', _start));
+    unawaited(_start());
   }
 
   final FlipperClient _client;
 
   StreamSubscription<ScreenFrame>? _frameSub;
+  StreamSubscription<InputFocus>? _focusSub;
   StreamSubscription<Status>? _statusSub;
+
+  bool doctorKeyboard = false;
+  InputFocusKind? keyboardKind;
   StreamSubscription<FlipperConnectionState>? _connectionSub;
 
-  /// The Flipper whose screen this is, held from the moment the stream starts.
-  ///
-  /// Starting a screen stream and subscribing to desktop status switch
-  /// something on inside one Flipper, and the `rightNow` commands that switch
-  /// them off again have to reach that same one. Looking the session up per
-  /// call meant a device switch left the first Flipper streaming its screen to
-  /// nobody while the stop went to the second.
-  FlipperSessionBinding? _binding;
-
   Future<void> _inputChain = Future<void>.value();
-  int _inputEpoch = 0;
 
   void Function(RawFrameData)? onRawFrame;
 
@@ -65,6 +58,7 @@ class RemoteSession extends ChangeNotifier {
   bool _lockStatusKnown = false;
   bool _justUnlocked = false;
   Timer? _unlockedFlashTimer;
+  bool _isDisconnected = false;
   bool _inputAvailable = false;
   bool _starting = false;
   bool _visualsEnabled = true;
@@ -90,6 +84,9 @@ class RemoteSession extends ChangeNotifier {
   ValueListenable<ui.Image?> get frameListenable => _frameNotifier;
   StreamOrientation get orientation => _orientation;
   bool get justUnlocked => _justUnlocked;
+
+  bool get isLocked => _isLocked;
+  bool get isDisconnected => _isDisconnected;
   bool get inputAvailable => _inputAvailable;
 
   /// Whether [button] is already being held down.
@@ -140,8 +137,8 @@ class RemoteSession extends ChangeNotifier {
   /// Exactly one open runs at a time, nominally three RPCs — fewer if the page
   /// goes away or visuals are paused mid-flight. A request arriving during one
   /// is held in [_restartWanted] and run afterwards rather than dropped:
-  /// dropping it left a reconnect with nothing behind it, and the page stayed
-  /// blank.
+  /// dropping it left a reconnect with nothing behind it, and since a frame is
+  /// the only thing that clears [_isDisconnected], the page stayed blank.
   ///
   /// That opens never overlap is what makes a single flag enough. Were they
   /// ever made concurrent — to hide the latency of three sequential round
@@ -160,79 +157,72 @@ class RemoteSession extends ChangeNotifier {
         // Cleared before the attempt, so only a request that arrives while
         // this one runs asks for another after it.
         _restartWanted = false;
-        // Held here rather than per request, so the start, the status
-        // subscribe and the stop that undoes them all land on one Flipper.
-        final binding = _binding ??= _client.bindCurrentSession();
-        await binding.run(_open);
-        if (_visualsEnabled &&
-            !identical(_binding, binding) &&
-            binding.isAlive) {
-          await binding.run(_sendStopVisuals);
+        if (_disposed || !_visualsEnabled) return;
+        try {
+          // Checked for teardown or a visual pause between each, so a page
+          // that goes away part way through stops the rest going out.
+          //
+          // Both library requests stay at rightNow; their defaults are
+          // foreground.
+          //
+          // For the subscribe that is correctness, not tidiness: the queue
+          // sorts by priority before arrival, so left at foreground it would
+          // be overtaken by the rightNow unsubscribe shutdown/pause sends. The
+          // device would be told to start pushing desktop status after being
+          // told to stop, and _stopRemote latches itself off at teardown, so
+          // nothing would ever unsubscribe it again. The same reasoning
+          // applies to the stream, which guiStopScreenStream undoes at
+          // rightNow. Equal-priority requests stay FIFO.
+          //
+          // desktopIsLocked has nothing that undoes it, so unlike the
+          // subscribe its rightNow is latency rather than correctness — and
+          // little of that, since _frameSub is live from the constructor and
+          // the screen is not waiting on it.
+          await _client.guiStartScreenStream(
+            priority: FlipperRequestPriority.rightNow,
+          );
+          if (_disposed) return;
+          if (!_visualsEnabled) {
+            await _stopVisuals();
+            return;
+          }
+          await _client.desktopStatusSubscribe(
+            priority: FlipperRequestPriority.rightNow,
+          );
+          if (_disposed) return;
+          if (!_visualsEnabled) {
+            await _stopVisuals();
+            return;
+          }
+          // Caught apart from the two above. The poll runs last, so by here
+          // the link has answered twice — a status rejection from it says
+          // something about the command, not the connection, and flagging the
+          // whole session disconnected for it is the mistake #94 was about,
+          // one status further along.
+          bool? locked;
+          try {
+            locked = await _client.desktopIsLockedNow();
+          } on FlipperRpcException catch (e) {
+            LogService.warn('[Remote] lock state unavailable: $e');
+          }
+          if (_disposed) return;
+          if (!_visualsEnabled) {
+            await _stopVisuals();
+            return;
+          }
+          if (locked != null) _applyLocked(locked, flash: false);
+        } catch (_) {
+          if (_disposed) return;
+          if (!_isDisconnected) {
+            _isDisconnected = true;
+            _safeNotify();
+          }
         }
+        // Inside the try, so a failed attempt still honours a reconnect that
+        // landed during it - that being the case where retrying matters most.
       } while (_restartWanted && !_disposed && _visualsEnabled);
     } finally {
       _starting = false;
-    }
-  }
-
-  Future<void> _open() async {
-    if (_disposed || !_visualsEnabled) return;
-    try {
-      // Checked for teardown or a visual pause between each, so a page
-      // that goes away part way through stops the rest going out.
-      //
-      // Both library requests stay at rightNow; their defaults are
-      // foreground.
-      //
-      // For the subscribe that is correctness, not tidiness: the queue
-      // sorts by priority before arrival, so left at foreground it would
-      // be overtaken by the rightNow unsubscribe shutdown/pause sends. The
-      // device would be told to start pushing desktop status after being
-      // told to stop, and _stopRemote latches itself off at teardown, so
-      // nothing would ever unsubscribe it again. The same reasoning
-      // applies to the stream, which guiStopScreenStream undoes at
-      // rightNow. Equal-priority requests stay FIFO.
-      //
-      // desktopIsLocked has nothing that undoes it, so unlike the
-      // subscribe its rightNow is latency rather than correctness — and
-      // little of that, since _frameSub is live from the constructor and
-      // the screen is not waiting on it.
-      await _client.guiStartScreenStream(
-        priority: FlipperRequestPriority.rightNow,
-      );
-      if (_disposed) return;
-      if (!_visualsEnabled) {
-        await _stopVisuals();
-        return;
-      }
-      await _client.desktopStatusSubscribe(
-        priority: FlipperRequestPriority.rightNow,
-      );
-      if (_disposed) return;
-      if (!_visualsEnabled) {
-        await _stopVisuals();
-        return;
-      }
-      // Caught apart from the two above. The poll runs last, so by here
-      // the link has answered twice — a status rejection from it says
-      // something about the command, not the connection, and flagging the
-      // whole session disconnected for it is the mistake #94 was about,
-      // one status further along.
-      bool? locked;
-      try {
-        locked = await _client.desktopIsLockedNow();
-      } on FlipperRpcException catch (e) {
-        LogService.warn('[Remote] lock state unavailable: $e');
-      }
-      if (_disposed) return;
-      if (!_visualsEnabled) {
-        await _stopVisuals();
-        return;
-      }
-      if (locked != null) _applyLocked(locked, flash: false);
-    } catch (e) {
-      if (_disposed) return;
-      LogService.warn('[Remote] open failed: $e');
     }
   }
 
@@ -248,28 +238,27 @@ class RemoteSession extends ChangeNotifier {
     _held.clear();
     _unlockedFlashTimer?.cancel();
     _frameSub?.cancel();
+    _focusSub?.cancel();
     _statusSub?.cancel();
     _connectionSub?.cancel();
     _pendingFrame = null;
     _pendingRgba = null;
-    _chain('release on shutdown', _releaseWireDown);
-    // guarded around the whole thing, not just the chain: _inputChain cannot
+    // guarded around the whole thing, not just the chain: _chain cannot
     // reject, but a whenComplete callback that throws rejects the future it
     // returns, and this one is dropped.
     unawaited(
-      guarded('[Remote] shutdown', () => _inputChain.whenComplete(_stopRemote)),
+      guarded(
+        '[Remote] shutdown',
+        () => _chain(
+          'release on shutdown',
+          _releaseWireDown,
+        ).whenComplete(_stopRemote),
+      ),
     );
   }
 
   Future<void> _stopVisuals() async {
-    final binding = _binding;
-    _binding = null;
-    if (binding == null ? !_client.isConnected : !binding.isAlive) return;
-    if (binding != null) return binding.run(_sendStopVisuals);
-    return _sendStopVisuals();
-  }
-
-  Future<void> _sendStopVisuals() async {
+    if (!_client.isConnected) return;
     // Future.sync for the same reason as _up: both of these resolve the
     // session synchronously, so one already gone throws rather than rejecting
     // - past a catchError attached to the result. Teardown is precisely when
@@ -311,41 +300,26 @@ class RemoteSession extends ChangeNotifier {
     _inputAvailable = state.connected;
 
     if (!state.connected) {
-      _pendingFrame = null;
-      _pendingRgba = null;
+      if (_isDisconnected) {
+        if (inputChanged) _safeNotify();
+        return;
+      }
+      _isDisconnected = true;
       final prev = _frameImage;
       _frameImage = null;
       _frameNotifier.value = null;
+      _safeNotify();
       prev?.dispose();
-      if (inputChanged) {
-        _releaseAll('link lost', send: false);
-        _safeNotify();
-      }
       return;
     }
 
+    // Input availability follows the transport; visual connectivity deliberately
+    // does not. A reconnect while paused can accept wrist inputs, but the LED
+    // stays disconnected until a real framebuffer arrives after resume.
     if (inputChanged) _safeNotify();
-    final binding = _binding;
-    if (binding != null && !_holds(binding, state.device)) {
-      _releaseAll('device changed', send: true);
-      unawaited(
-        guarded('[Remote] follow device', () async {
-          await _stopVisuals();
-          await _start();
-        }),
-      );
-      return;
-    }
     if (!_visualsEnabled) return;
 
-    unawaited(guarded('[Remote] start visuals', _start));
-  }
-
-  bool _holds(FlipperSessionBinding binding, FlipperDevice? device) {
-    if (!binding.isAlive) return false;
-    final bound = binding.device;
-    return device == null ||
-        (bound != null && bound.id == device.id && bound.link == device.link);
+    unawaited(_start());
   }
 
   void _applyStatus(Status status) => _applyLocked(status.locked);
@@ -377,7 +351,11 @@ class RemoteSession extends ChangeNotifier {
   }
 
   void _onFrame(ScreenFrame frame) {
-    if (_disposed || !_visualsEnabled || !_inputAvailable) return;
+    if (_disposed || !_visualsEnabled) return;
+    if (_isDisconnected) {
+      _isDisconnected = false;
+      _safeNotify();
+    }
     if (_recording) {
       _ingest(decodeFrameSync(frame));
       return;
@@ -389,7 +367,7 @@ class RemoteSession extends ChangeNotifier {
   void _ensureDecodeWorker() {
     if (_decodeBusy || _disposed || !_visualsEnabled) return;
     _decodeBusy = true;
-    unawaited(guarded('[Remote] decode frames', _pumpDecode));
+    unawaited(_pumpDecode());
   }
 
   Future<void> _pumpDecode() async {
@@ -423,7 +401,7 @@ class RemoteSession extends ChangeNotifier {
     _pendingRgba = rgba;
     if (_uploadBusy || _disposed) return;
     _uploadBusy = true;
-    unawaited(guarded('[Remote] upload frames', _pumpUpload));
+    unawaited(_pumpUpload());
   }
 
   Future<void> _pumpUpload() async {
@@ -433,7 +411,7 @@ class RemoteSession extends ChangeNotifier {
         if (rgba == null) return;
         _pendingRgba = null;
         final image = await createImageFromRgba(rgba);
-        if (_disposed || !_visualsEnabled || !_inputAvailable) {
+        if (_disposed || !_visualsEnabled) {
           image.dispose();
           return;
         }
@@ -447,18 +425,61 @@ class RemoteSession extends ChangeNotifier {
     }
   }
 
+  void _onInputFocus(InputFocus focus) {
+    if (_disposed) return;
+    doctorKeyboard = true;
+    keyboardKind = focus.kind;
+    _safeNotify();
+  }
+
+  Future<void> sendKeyboardInsert(String text) {
+    if (text.isEmpty) return Future<void>.value();
+    return _chain('insert', () {
+      return _client.guiSendTextAndForget(
+        SendTextRequest(action: TextAction.INSERT, text: text),
+      );
+    });
+  }
+
+  Future<void> sendKeyboardBackspace() {
+    return _chain('backspace', () {
+      return _client.guiSendTextAndForget(
+        SendTextRequest(action: TextAction.BACKSPACE),
+      );
+    });
+  }
+
+  Future<void> sendKeyboardSubmit() {
+    return _chain('submit', () {
+      return _client.guiSendTextAndForget(
+        SendTextRequest(action: TextAction.SUBMIT),
+      );
+    });
+  }
+
+  Future<void> sendKeySteps(List<KeyStep> steps) {
+    if (steps.isEmpty) return Future<void>.value();
+    return _chain('keys', () async {
+      for (final step in steps) {
+        await _sendInput(
+          _key(step.button),
+          step.long ? InputType.LONG : InputType.SHORT,
+        );
+      }
+    });
+  }
+
   Future<void> press(RemoteButton button, {bool long = false}) {
     final item = _enqueue(_animAsset(button));
     final type = long ? InputType.LONG : InputType.SHORT;
     final key = _key(button);
-    _chain('press ${button.name}', () async {
+    return _chain('press ${button.name}', () async {
       await Future.wait([
         _down(key),
         _typed(key, type),
         _up(key, onAnswer: () => _dequeue(item)),
       ]);
     });
-    return _inputChain;
   }
 
   Future<void> beginHold(RemoteButton button) {
@@ -470,10 +491,11 @@ class RemoteSession extends ChangeNotifier {
     state.longTimer = Timer(const Duration(milliseconds: 500), () {
       if (!identical(_held[button], state)) return;
       state.longFired = true;
-      _chain('long press ${button.name}', () => _typed(key, InputType.LONG));
+      unawaited(
+        _chain('long press ${button.name}', () => _typed(key, InputType.LONG)),
+      );
     });
-    _chain('hold ${button.name}', () => _down(key));
-    return _inputChain;
+    return _chain('hold ${button.name}', () => _down(key));
   }
 
   Future<void> endHold(RemoteButton button) {
@@ -481,13 +503,12 @@ class RemoteSession extends ChangeNotifier {
     if (state == null) return _inputChain;
     state.longTimer?.cancel();
     final key = _key(button);
-    _chain('end hold ${button.name}', () async {
+    return _chain('end hold ${button.name}', () async {
       await Future.wait([
         if (!state.longFired) _typed(key, InputType.SHORT),
         _up(key, onAnswer: () => _dequeue(state.item)),
       ]);
     });
-    return _inputChain;
   }
 
   Future<void> unlock() async {
@@ -506,11 +527,24 @@ class RemoteSession extends ChangeNotifier {
     }
   }
 
+  Future<void> lock() async {
+    final item = _enqueue(_animAsset(RemoteButton.up));
+    Timer(_kAnimDuration, () => _dequeue(item));
+    try {
+      await _sendInput(InputKey.UP, InputType.PRESS);
+      await _sendInput(InputKey.UP, InputType.LONG);
+      await _sendInput(InputKey.UP, InputType.RELEASE);
+      _applyLocked(await _client.desktopIsLockedNow());
+    } catch (e) {
+      LogService.warn('[Remote] lock failed: $e');
+    }
+  }
+
   /// Queues [action] behind whatever input is already in flight.
   ///
   /// [what] names the button. Most of what fails here arrives without a stack -
   /// flipperlib rejects through a bare completeError - so an entry reading only
-  /// "queued" could not be attributed to any of the six callers.
+  /// "queued" could not be attributed to any of the five callers.
   ///
   /// _sendInput catches and warns for itself, so an ordinary refused PRESS
   /// never reaches guarded. _up is the one that could: see the Future.sync
@@ -518,20 +552,15 @@ class RemoteSession extends ChangeNotifier {
   /// is what makes error the right level for it.
   ///
   /// The predecessor is awaited inside guarded, so _inputChain cannot reject
-  /// and one failed action cannot strand the input queued behind it. Whoever
-  /// waits on the action waits on _inputChain.
-  void _chain(String what, Future<void> Function() action) {
+  /// and one failed action cannot strand the input queued behind it.
+  Future<void> _chain(String what, Future<void> Function() action) {
     final previous = _inputChain;
-    // The key goes to the Flipper whose screen is on show, which is the one
-    // this session holds - not whichever is active by the time the queue in
-    // front of it drains.
-    final binding = _binding;
-    final epoch = _inputEpoch;
-    _inputChain = guarded('[RemoteInput] $what', () async {
+    final next = guarded('[RemoteInput] $what', () async {
       await previous;
-      if (epoch != _inputEpoch) return;
-      await (binding == null ? action() : binding.run(action));
+      await action();
     });
+    _inputChain = next;
+    return next;
   }
 
   Future<void> _sendInput(InputKey key, InputType type) async {
@@ -589,22 +618,6 @@ class RemoteSession extends ChangeNotifier {
           }),
     );
     return sent.future;
-  }
-
-  void _releaseAll(String why, {required bool send}) {
-    _inputEpoch++;
-    for (final held in _held.values) {
-      held.longTimer?.cancel();
-    }
-    _held.clear();
-    if (_queue.isNotEmpty) {
-      _queue.clear();
-      _safeNotify();
-    }
-    _chain(
-      'release all: $why',
-      send ? _releaseWireDown : () async => _wireDown.clear(),
-    );
   }
 
   Future<void> _releaseWireDown() async {

@@ -1,5 +1,3 @@
-import '../../../../services/archive/sort_settings.dart';
-import '../../../../services/guarded.dart';
 import '../../../../services/localization/l10n.dart';
 
 import 'dart:async';
@@ -17,7 +15,6 @@ import '../../../../components/filelist/columns.dart';
 import 'sort.dart';
 import '../../../../components/filelist/table.dart';
 import '../../../../components/filelist/toolbar.dart';
-import '../failure_toast.dart';
 
 /// Lists keys deleted remotely but still cached on this device, using the same
 /// table design as the per-category pages. Unlike those, every category shares a
@@ -25,18 +22,9 @@ import '../failure_toast.dart';
 /// limited to the fields common to all of them (name/folder, protocol, size,
 /// modified).
 class DeletedPage extends StatefulWidget {
-  const DeletedPage({
-    super.key,
-    required this.controller,
-    required this.sortSettings,
-  });
+  const DeletedPage({super.key, required this.controller});
 
   final ArchiveController controller;
-
-  /// Shared with every other archive table and owned by `AppShell`, so a sort
-  /// picked here is the one they all open in - and the rail's other mounted
-  /// tables follow it without being rebuilt by hand.
-  final ArchiveSortSettings sortSettings;
 
   @override
   State<DeletedPage> createState() => _DeletedPageState();
@@ -47,30 +35,18 @@ class _DeletedPageState extends State<DeletedPage> {
 
   String _query = '';
   String? _filterVal;
+  String _sortKey = 'name';
+  bool _sortAsc = true;
 
   bool _selectionMode = false;
   final Set<String> _selected = <String>{};
 
   ArchiveController get _ctrl => widget.controller;
 
-  /// Rebuilds on either the archive's own changes or a sort picked on another
-  /// mounted table. Built once rather than per build, so the `AnimatedBuilder`
-  /// is not resubscribing to a fresh `Listenable` every frame.
-  late final Listenable _repaint = Listenable.merge([
-    _ctrl,
-    widget.sortSettings,
-  ]);
-
-  List<SortOption> get _sortOpts => sortOptionsFor(deletedColumns());
-
-  /// The stored sort, held to the keys this table's columns offer.
-  ({String key, bool asc}) get _sort =>
-      widget.sortSettings.resolve(_sortOpts.map((o) => o.key));
-
   @override
   void initState() {
     super.initState();
-    unawaited(guarded('[Archive] load deleted meta', _ctrl.loadMetaForDeleted));
+    unawaited(_ctrl.loadMetaForDeleted());
   }
 
   @override
@@ -117,8 +93,7 @@ class _DeletedPageState extends State<DeletedPage> {
         return false;
       }).toList();
     }
-    final sort = _sort;
-    return sortArchiveKeys(out, sort.key, sort.asc);
+    return sortArchiveKeys(out, _sortKey, _sortAsc);
   }
 
   List<ArchiveKey> get _selectedKeys =>
@@ -158,24 +133,18 @@ class _DeletedPageState extends State<DeletedPage> {
   }
 
   void _onSort(String key) {
-    unawaited(
-      guarded(
-        '[ArchiveSort] storing the picked sort',
-        () =>
-            widget.sortSettings.pick(key, offered: _sortOpts.map((o) => o.key)),
-      ),
-    );
+    setState(() {
+      if (_sortKey == key) {
+        _sortAsc = !_sortAsc;
+      } else {
+        _sortKey = key;
+        _sortAsc = true;
+      }
+    });
   }
 
   Future<void> _bulkRestore() async {
     await _ctrl.restoreKeys(_selectedKeys);
-    if (mounted) {
-      reportArchiveFailure(
-        context,
-        _ctrl.lastFailure,
-        context.l10n.archiveRestoreFailed,
-      );
-    }
     _exitSelection();
   }
 
@@ -240,15 +209,10 @@ class _DeletedPageState extends State<DeletedPage> {
       return;
     }
     if (!_ctrl.isConnected) {
-      unawaited(
-        guarded(
-          '[Archive] open the picker',
-          () => promptConnectDevice(context),
-        ),
-      );
+      unawaited(promptConnectDevice(context, _ctrl.client));
       return;
     }
-    unawaited(guarded('[Archive] refresh deleted', _ctrl.refresh));
+    unawaited(_ctrl.refresh());
   }
 
   void _clearFilters() {
@@ -265,7 +229,7 @@ class _DeletedPageState extends State<DeletedPage> {
     final headerColor = colors.adaptCategoryHeader(colors.accent);
 
     return AnimatedBuilder(
-      animation: _repaint,
+      animation: _ctrl,
       builder: (context, _) {
         final all = _ctrl.deletedKeys();
         final filterOpts = _filterOptions(all);
@@ -317,12 +281,6 @@ class _DeletedPageState extends State<DeletedPage> {
                         query: _query,
                         filterVal: _filterVal,
                         filterOpts: filterOpts,
-                        sort: (
-                          key: _sort.key,
-                          asc: _sort.asc,
-                          opts: _sortOpts,
-                          onSort: _onSort,
-                        ),
                         starredOnly: false,
                         catColor: headerColor,
                         colors: colors,
@@ -370,8 +328,8 @@ class _DeletedPageState extends State<DeletedPage> {
                           children: [
                             ArchiveColumnHeader(
                               cols: cols,
-                              sortKey: _sort.key,
-                              sortAsc: _sort.asc,
+                              sortKey: _sortKey,
+                              sortAsc: _sortAsc,
                               onSort: _onSort,
                               colors: colors,
                               selectionMode: _selectionMode,

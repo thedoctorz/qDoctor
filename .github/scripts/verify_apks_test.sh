@@ -55,10 +55,17 @@ with zipfile.ZipFile(path, "w") as z:
     z.writestr("classes2.dex", "dex")          # real APKs have these; must not confuse the check
     z.writestr("resources.arsc", "res")
     z.writestr("assets/flutter_assets/lib/fonts/x.ttf", "font")
+    extras = (
+        "libdoctor_subghz.so",
+        "libqunleashed_mfkey32.so",
+        "libqunleashed_hardnested.so",
+    )
     for abi in abis:
         z.writestr(f"lib/{abi}/libapp.so", b"\0" * size)
         z.writestr(f"lib/{abi}/libflutter.so", "engine")
         z.writestr(f"lib/{abi}/libapp.so.sym", "symbols")  # superstring; pins the exact-line match
+        for lib in extras:
+            z.writestr(f"lib/{abi}/{lib}", b"native")
 PY
 }
 
@@ -71,6 +78,11 @@ with zipfile.ZipFile(path, "w") as z:
     for entry in ("AndroidManifest.xml", "classes.dex"):
         if not entry.startswith(omit):
             z.writestr(entry, "body")
+    extras = (
+        "libdoctor_subghz.so",
+        "libqunleashed_mfkey32.so",
+        "libqunleashed_hardnested.so",
+    )
     for abi in abis:
         if not f"lib/{abi}/libapp.so".startswith(omit):
             z.writestr(f"lib/{abi}/libapp.so", b"\0" * size)
@@ -80,15 +92,22 @@ with zipfile.ZipFile(path, "w") as z:
             z.writestr(f"lib/{abi}/libapp.so.sym", "symbols")
         if not f"lib/{abi}/libflutter.so".startswith(omit):
             z.writestr(f"lib/{abi}/libflutter.so", "engine")
+        for lib in extras:
+            path = f"lib/{abi}/{lib}"
+            if omit.endswith("/") and path.startswith(omit):
+                continue
+            if path == omit:
+                continue
+            z.writestr(path, b"native")
 PY
 }
 
 good_set() {
   local d="$1"; mkdir -p "$d"
-  apk "$d/qunleashed_0.13.0_android_universal.apk"   armeabi-v7a arm64-v8a x86_64
-  apk "$d/qunleashed_0.13.0_android_armeabi-v7a.apk" armeabi-v7a
-  apk "$d/qunleashed_0.13.0_android_arm64-v8a.apk"   arm64-v8a
-  apk "$d/qunleashed_0.13.0_android_x86_64.apk"      x86_64
+  apk "$d/doctormobile_0.13.0_android_universal.apk"   armeabi-v7a arm64-v8a x86_64
+  apk "$d/doctormobile_0.13.0_android_armeabi-v7a.apk" armeabi-v7a
+  apk "$d/doctormobile_0.13.0_android_arm64-v8a.apk"   arm64-v8a
+  apk "$d/doctormobile_0.13.0_android_x86_64.apk"      x86_64
 }
 
 echo "verify_apks.sh"
@@ -97,18 +116,22 @@ d="$TMP/good"; good_set "$d"
 accepts "a complete artifact set passes" "$d"
 
 d="$TMP/no-snapshot"; good_set "$d"
-apk_omitting "$d/qunleashed_0.13.0_android_arm64-v8a.apk" "lib/arm64-v8a/libapp.so" arm64-v8a
+apk_omitting "$d/doctormobile_0.13.0_android_arm64-v8a.apk" "lib/arm64-v8a/libapp.so" arm64-v8a
 refuses "a split APK missing libapp.so is refused" "$d" "the Dart snapshot is missing"
+
+d="$TMP/no-subghz"; good_set "$d"
+apk_omitting "$d/doctormobile_0.13.0_android_arm64-v8a.apk" "lib/arm64-v8a/libdoctor_subghz.so" arm64-v8a
+refuses "a split APK missing doctor_subghz is refused" "$d" "has no lib/arm64-v8a/libdoctor_subghz.so"
 
 # The task stages nothing when the per-ABI directory is absent, so the APK has
 # no lib/ tree at all - not merely a missing file.
 d="$TMP/no-lib-tree"; good_set "$d"
-apk_omitting "$d/qunleashed_0.13.0_android_x86_64.apk" "lib/x86_64/" x86_64
+apk_omitting "$d/doctormobile_0.13.0_android_x86_64.apk" "lib/x86_64/" x86_64
 refuses "an APK with no lib/ tree at all is refused" "$d" "the Dart snapshot is missing"
 
 # Present is not populated.
 d="$TMP/empty-snapshot"; good_set "$d"
-python3 - "$d/qunleashed_0.13.0_android_x86_64.apk" <<'PY'
+python3 - "$d/doctormobile_0.13.0_android_x86_64.apk" <<'PY'
 import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], "w") as z:
     z.writestr("AndroidManifest.xml", "manifest")
@@ -119,7 +142,7 @@ refuses "a zero-byte libapp.so is refused" "$d" "expected at least"
 
 # The listing reads only the central directory, so entry data must be checked.
 d="$TMP/corrupt-data"; good_set "$d"
-python3 - "$d/qunleashed_0.13.0_android_x86_64.apk" <<'PY'
+python3 - "$d/doctormobile_0.13.0_android_x86_64.apk" <<'PY'
 import sys, zipfile, io
 path = sys.argv[1]
 raw = bytearray(open(path, "rb").read())
@@ -130,38 +153,38 @@ PY
 refuses "an APK whose data is corrupt but listable is refused" "$d" "failed its integrity check"
 
 d="$TMP/universal-partial"; good_set "$d"
-apk "$d/qunleashed_0.13.0_android_universal.apk" armeabi-v7a arm64-v8a
+apk "$d/doctormobile_0.13.0_android_universal.apk" armeabi-v7a arm64-v8a
 refuses "a universal APK missing an ABI is refused" "$d" "the Dart snapshot is missing"
 
 d="$TMP/unsplit"; good_set "$d"
-apk "$d/qunleashed_0.13.0_android_x86_64.apk" armeabi-v7a arm64-v8a x86_64
+apk "$d/doctormobile_0.13.0_android_x86_64.apk" armeabi-v7a arm64-v8a x86_64
 refuses "a split APK carrying other ABIs is refused" "$d" "carries an unexpected ABI"
 
 d="$TMP/no-manifest"; good_set "$d"
-apk_omitting "$d/qunleashed_0.13.0_android_x86_64.apk" "AndroidManifest.xml" x86_64
+apk_omitting "$d/doctormobile_0.13.0_android_x86_64.apk" "AndroidManifest.xml" x86_64
 refuses "an APK with no AndroidManifest.xml is refused" "$d" "has no AndroidManifest.xml"
 
 d="$TMP/no-dex"; good_set "$d"
-apk_omitting "$d/qunleashed_0.13.0_android_universal.apk" "classes.dex" armeabi-v7a arm64-v8a x86_64
+apk_omitting "$d/doctormobile_0.13.0_android_universal.apk" "classes.dex" armeabi-v7a arm64-v8a x86_64
 refuses "an APK with no classes.dex is refused" "$d" "has no classes.dex"
 
 d="$TMP/unreadable"; good_set "$d"
-printf 'not a zip\n' > "$d/qunleashed_0.13.0_android_x86_64.apk"
+printf 'not a zip\n' > "$d/doctormobile_0.13.0_android_x86_64.apk"
 refuses "an unreadable APK is refused" "$d" "failed its integrity check"
 
 d="$TMP/stray"; good_set "$d"
-apk "$d/qunleashed_0.13.0_android_riscv64.apk" riscv64
+apk "$d/doctormobile_0.13.0_android_riscv64.apk" riscv64
 refuses "an artifact with an unrecognised name is refused" "$d" "does not match any known"
 
 # The build guards this too, but this is the gate that must not trust the build.
 d="$TMP/partial-set"; mkdir -p "$d"
-apk "$d/qunleashed_0.13.0_android_universal.apk" armeabi-v7a arm64-v8a x86_64
+apk "$d/doctormobile_0.13.0_android_universal.apk" armeabi-v7a arm64-v8a x86_64
 refuses "an incomplete artifact set is refused" "$d" "No armeabi-v7a APK"
 
 d="$TMP/no-universal"; mkdir -p "$d"
-apk "$d/qunleashed_0.13.0_android_armeabi-v7a.apk" armeabi-v7a
-apk "$d/qunleashed_0.13.0_android_arm64-v8a.apk"   arm64-v8a
-apk "$d/qunleashed_0.13.0_android_x86_64.apk"      x86_64
+apk "$d/doctormobile_0.13.0_android_armeabi-v7a.apk" armeabi-v7a
+apk "$d/doctormobile_0.13.0_android_arm64-v8a.apk"   arm64-v8a
+apk "$d/doctormobile_0.13.0_android_x86_64.apk"      x86_64
 refuses "a set with no universal APK is refused" "$d" "No universal APK"
 
 d="$TMP/empty"; mkdir -p "$d"
@@ -170,8 +193,8 @@ refuses "a missing directory is refused" "$TMP/does-not-exist" "No Android APKs 
 
 # One run must report every problem, not stop at the first.
 d="$TMP/many"; good_set "$d"
-apk_omitting "$d/qunleashed_0.13.0_android_x86_64.apk" "classes.dex" x86_64
-apk_omitting "$d/qunleashed_0.13.0_android_arm64-v8a.apk" "lib/arm64-v8a/libapp.so" arm64-v8a
+apk_omitting "$d/doctormobile_0.13.0_android_x86_64.apk" "classes.dex" x86_64
+apk_omitting "$d/doctormobile_0.13.0_android_arm64-v8a.apk" "lib/arm64-v8a/libapp.so" arm64-v8a
 out="$(run "$d" || true)"
 if [[ "$out" == *"has no classes.dex"* && "$out" == *"the Dart snapshot is missing"* ]]; then
   pass "one run reports every broken artifact"
@@ -180,7 +203,7 @@ else
 fi
 
 # A rejected artifact must not also be logged as ok.
-if [[ "$out" == *"  ok  qunleashed_0.13.0_android_x86_64.apk"* ]]; then
+if [[ "$out" == *"  ok  doctormobile_0.13.0_android_x86_64.apk"* ]]; then
   fail "a failing APK is still logged as ok" "$out"
 else
   pass "a failing APK is not logged as ok"

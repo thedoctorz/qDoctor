@@ -1,11 +1,12 @@
 import 'dart:collection';
 import 'dart:ffi';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
-import '../../../services/native.dart';
 import 'cuid_dict_format.dart';
+import 'mifare_native.dart';
 import 'nested_models.dart';
 
 /// Per-CUID candidate dictionary produced for the static-encrypted /
@@ -203,21 +204,25 @@ class NativeStaticEncryptedRecoverer implements StaticEncryptedRecoverer {
     // Isolate.run hands the result back by ownership transfer rather than
     // copying it, so the assembled bodies cross the boundary for free — a
     // plain SendPort would deep-copy every byte of them.
-    return spawnAttackIsolate(_buildInIsolate, singles);
+    return Isolate.run(() => _buildInIsolate(singles));
   }
 
   static List<StaticCandidateDict> _buildInIsolate(List<StaticNonce> singles) {
+    // openMifareNativeLibrary already reports a missing library as one of
+    // these; a library built without the symbol is just as unusable.
     final library = openMifareNativeLibrary();
-    final staticFn = lookupNativeFunction(
-      () => library.lookupFunction<_StaticNative, _StaticDart>(
+    final _StaticDart staticFn;
+    final _ReduceDart reduceFn;
+    try {
+      staticFn = library.lookupFunction<_StaticNative, _StaticDart>(
         'qunleashed_static_candidates',
-      ),
-    );
-    final reduceFn = lookupNativeFunction(
-      () => library.lookupFunction<_ReduceNative, _ReduceDart>(
+      );
+      reduceFn = library.lookupFunction<_ReduceNative, _ReduceDart>(
         'qunleashed_rf08s_reduce_pair',
-      ),
-    );
+      );
+    } catch (e) {
+      throw NativeEngineUnavailable(e);
+    }
 
     // The arena frees whatever was taken even if allocation fails part-way
     // through, and native memory is process-scoped: it outlives the isolate,

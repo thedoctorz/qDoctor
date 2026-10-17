@@ -22,6 +22,7 @@ class ToolCardHeader {
 
 class ToolItemModel {
   const ToolItemModel({
+    required this.id,
     required this.iconAsset,
     required this.iconColor,
     required this.title,
@@ -31,6 +32,7 @@ class ToolItemModel {
     this.badge,
   });
 
+  final String id;
   final String iconAsset;
   final Color iconColor;
   final String title;

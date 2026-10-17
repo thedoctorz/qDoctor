@@ -44,12 +44,7 @@ class _IrLibFilePageState extends State<IrLibFilePage> {
     if (bytes == null) {
       setState(() {
         _loading = false;
-        // irDownloadFailed names no cause; the controller kept one and
-        // nothing read it. #114.
-        final reason = widget.controller.lastFailure;
-        _error = reason == null
-            ? l10n.irDownloadFailed
-            : l10n.fmFailedBecause(l10n.irDownloadFailed, reason);
+        _error = l10n.irDownloadFailed;
       });
       return;
     }
@@ -69,8 +64,6 @@ class _IrLibFilePageState extends State<IrLibFilePage> {
   @override
   Widget build(BuildContext context) {
     return IrFileViewer(
-      sendFailureReason: () => widget.controller.lastFailure,
-      client: widget.controller.client,
       fileName: widget.entry.name,
       subtitle: widget.entry.path,
       loading: _loading,

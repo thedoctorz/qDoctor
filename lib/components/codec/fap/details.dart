@@ -50,6 +50,8 @@ FapCompat evaluateFap(
   FapInfo? info, {
   String? deviceApi,
   String? deviceTarget,
+  int? minApiMajor,
+  int? maxApiMajor,
 }) {
   if (info == null) return const FapCompat(FapVerdict.unreadable);
 
@@ -65,18 +67,20 @@ FapCompat evaluateFap(
   }
 
   final device = parseApi(deviceApi);
-  if (device == null) {
+  final minMajor = minApiMajor ?? device?.$1;
+  final maxMajor = maxApiMajor ?? device?.$1;
+  if (minMajor == null || maxMajor == null) {
     return FapCompat(FapVerdict.unknown, appApi: manifest.api);
   }
 
-  if (manifest.apiMajor < device.$1) {
+  if (manifest.apiMajor < minMajor) {
     return FapCompat(
       FapVerdict.apiTooOld,
       appApi: manifest.api,
       deviceApi: deviceApi,
     );
   }
-  if (manifest.apiMajor > device.$1) {
+  if (manifest.apiMajor > maxMajor) {
     return FapCompat(
       FapVerdict.apiTooNew,
       appApi: manifest.api,

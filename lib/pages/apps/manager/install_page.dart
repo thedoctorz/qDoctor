@@ -1,4 +1,3 @@
-import '../../../services/guarded.dart';
 import '../../../services/localization/l10n.dart';
 
 import 'dart:async';
@@ -14,6 +13,7 @@ import '../../../components/filelist/toolbar.dart';
 import '../../../components/codec/fap/info.dart';
 import '../../../components/fap_facts.dart';
 import '../../../components/icon.dart';
+import '../../../components/notification.dart';
 import '../../../theme/theme.dart';
 import '../actions.dart';
 import '../data/apps_backend.dart';
@@ -51,9 +51,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => unawaited(guarded('[AppsInstall] first load', _prime)),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_prime()));
   }
 
   Future<void> _prime() async {
@@ -120,7 +118,16 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
     card: card,
     manifest: _backend.manifests.byAlias(card.alias),
     targetSdk: _backend.targetSdk,
+    apiWindow: _backend.apiMajorWindow,
   );
+
+  Future<void> _install(AppCard card) async {
+    final ok = await _engine.installOrUpdate(card);
+    if (!mounted) return;
+    final message = _engine.consumeFailure(card.alias);
+    if (ok || message == null) return;
+    context.showNotification(message, type: QNotificationType.error);
+  }
 
   /// What installing this entry would do to the app already on the device: the
   /// pack can carry a newer build, the same one, or an older one — the last is
@@ -154,30 +161,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
     }
   }
 
-  /// Entries whose action sheet is being prepared, or is open.
-  ///
-  /// The sheet cannot be shown until the `.fap` has been read off disk and
-  /// parsed, and the row stays tappable for as long as that takes - so two taps
-  /// read the file twice and stacked two identical sheets, each to be dismissed
-  /// separately. The release waits for the sheet to close, because showing it
-  /// is awaited; that is wider than the bug needs and costs nothing, since a
-  /// modal sheet already covers the row. Keyed on the entry, because preparing
-  /// a sheet for a different app meanwhile is no worse than preparing the first
-  /// one. #244.
-  final Set<String> _preparingSheet = {};
-
   Future<void> _showActions(AtpEntry entry) async {
-    if (!_preparingSheet.add(entry.appId)) return;
-    try {
-      await _showActionsFor(entry);
-    } finally {
-      // Not in setState: no row is drawn from this. Cleared even once the page
-      // has gone, so an entry left in the set cannot wedge a later tap.
-      _preparingSheet.remove(entry.appId);
-    }
-  }
-
-  Future<void> _showActionsFor(AtpEntry entry) async {
     final colors = context.appColors;
     final card = AppCard.fromAtp(entry, api: _atp.block?.api ?? '');
     final action = _actionFor(entry);
@@ -210,7 +194,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
             icon: Icons.download,
             color: colors.accent,
             filled: true,
-            onTap: () => _engine.installOrUpdate(card),
+            onTap: () => unawaited(_install(card)),
           )
         else ...[
           if (action == PackAction.update)
@@ -219,7 +203,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
               icon: Icons.arrow_upward,
               color: colors.success,
               filled: true,
-              onTap: () => _engine.installOrUpdate(card),
+              onTap: () => unawaited(_install(card)),
             )
           else if (action == PackAction.downgrade)
             AppActionEntry(
@@ -227,7 +211,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
               icon: Icons.arrow_downward,
               color: colors.danger,
               filled: true,
-              onTap: () => _engine.installOrUpdate(card),
+              onTap: () => unawaited(_install(card)),
             ),
           AppActionEntry(
             label: ctx.l10n.commonOpen,
@@ -235,9 +219,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
             color: colors.accent,
             filled: action == PackAction.none,
             half: true,
-            onTap: () => unawaited(
-              guarded('[AppsInstall] launch', () => _launch(entry)),
-            ),
+            onTap: () => unawaited(_launch(entry)),
           ),
           AppActionEntry(
             label: ctx.l10n.appActionUninstall,
@@ -245,12 +227,9 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
             color: colors.danger,
             half: true,
             onTap: () => unawaited(
-              guarded(
-                '[AppsInstall] uninstall',
-                () => _engine.deleteInstalled(
-                  alias: entry.appId,
-                  fapPath: entry.installPath,
-                ),
+              _engine.deleteInstalled(
+                alias: entry.appId,
+                fapPath: entry.installPath,
               ),
             ),
           ),
@@ -262,7 +241,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
   Future<void> _launch(AtpEntry entry) {
     final path =
         _backend.manifests.byAlias(entry.appId)?.path ?? entry.installPath;
-    return launchApp(context, () => _engine.launchPath(path), target: path);
+    return launchApp(context, () => _engine.launchPath(path));
   }
 
   @override
@@ -335,7 +314,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
                 syncing: _atp.loading,
                 enabled: !_atp.loading,
                 catColor: header,
-                onTap: () => unawaited(guarded('[AppsInstall] sync', _refresh)),
+                onTap: () => unawaited(_refresh()),
               ),
               CategoryCountBadge(
                 filtered: visible.length,
@@ -376,16 +355,10 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
 
   Widget _buildBody(List<AtpEntry> visible, Color header) {
     if (_atp.entries.isEmpty) {
-      // Three states, not two: reading it, read it and it was empty, and
-      // could not read it at all. The third used to render as the second.
-      // #112.
-      final failed = !_atp.loading && _atp.failed;
       return ArchiveEmptyView(
-        icon: failed ? Icons.cloud_off : Icons.extension_off,
+        icon: Icons.extension_off,
         title: _atp.loading
             ? context.l10n.atpReadingRelease
-            : failed
-            ? context.l10n.appsLoadFailed
             : context.l10n.atpNoApps,
         subtitle: _atp.loading ? null : context.l10n.atpSyncToFetch,
       );
@@ -402,13 +375,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
       sort: _sort,
       onSort: _onSort,
       header: header,
-      // Returns the work rather than starting it. `RefreshIndicator` holds
-      // its spinner until this future settles, and
-      // `() async => unawaited(...)` settles immediately - so the spinner used
-      // to vanish before the download had begun. `guarded` completes when the
-      // task does and never rejects, which is also what the indicator wants.
-      // #23
-      onRefresh: () => guarded('[AppsInstall] pull to refresh', _refresh),
+      onRefresh: () async => unawaited(_refresh()),
       rowBuilder: (entry, cols) => _EntryRow(
         key: ValueKey(entry.appId),
         entry: entry,
@@ -416,9 +383,7 @@ class _AtpInstallPageState extends State<AtpInstallPage> {
         header: header,
         packAction: _actionFor(entry),
         action: _engine.actions[entry.appId],
-        onTap: () => unawaited(
-          guarded('[AppsInstall] open actions', () => _showActions(entry)),
-        ),
+        onTap: () => unawaited(_showActions(entry)),
       ),
     );
   }

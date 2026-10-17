@@ -1,14 +1,11 @@
 import 'dart:io' as io;
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
-
 import 'package:path_provider/path_provider.dart';
 
-import '../logging.dart';
 import '../../components/path.dart';
 import 'permissions.dart';
 
-const String kAppDocumentsFolderName = 'qUnleashed';
+const String kAppDocumentsFolderName = 'DoctorMobile';
 const String kDevicesFolderName = 'Devices';
 const String kAppsCatalogFileName = '.catalog.json';
 const String kScreenshotsFolderName = 'Screenshots';
@@ -65,26 +62,7 @@ String? normalizeFlipperDeviceName(String? raw) {
   return name.isEmpty ? null : name;
 }
 
-/// Stands in for the user's Documents folder while a test runs.
-///
-/// Every path in this file hangs off [userDocumentsDirectory], and on desktop
-/// that reads `USERPROFILE`/`HOME` directly rather than going through
-/// `path_provider` - so a test that stubs the platform interface still writes
-/// into the real one. It is set by [debugUseDocumentsRoot] and nothing else.
-io.Directory? _debugDocumentsRoot;
-
-/// Points every app path at [dir], or back at the user's own folder for null.
-///
-/// For tests. Without it a case that touches storage writes into the
-/// developer's actual `Documents/qUnleashed`, alongside their devices, and
-/// leaves it there.
-@visibleForTesting
-void debugUseDocumentsRoot(io.Directory? dir) => _debugDocumentsRoot = dir;
-
 Future<io.Directory> userDocumentsDirectory() async {
-  final override = _debugDocumentsRoot;
-  if (override != null) return override;
-
   final sep = io.Platform.pathSeparator;
 
   if (io.Platform.isWindows) {
@@ -181,28 +159,7 @@ Future<io.File> atpIndexFile() async {
 
 Future<io.Directory> shareCacheDirectory() async {
   final base = await getTemporaryDirectory();
-  final dir = io.Directory(pathJoin([base.path, 'qunleashed_share']));
-  await dir.create(recursive: true);
-  return dir;
-}
-
-/// A fresh folder for files another application dropped onto this one, one
-/// per drop so two drops cannot overwrite each other's files.
-Future<io.Directory> droppedFilesDirectory() => _transferScratch('dropped');
-
-/// A fresh folder for a file dragged out of the app to be copied into before
-/// another application is handed its path.
-Future<io.Directory> draggedFilesDirectory() => _transferScratch('dragged');
-
-Future<io.Directory> _transferScratch(String kind) async {
-  final base = await getTemporaryDirectory();
-  final dir = io.Directory(
-    pathJoin([
-      base.path,
-      'qunleashed_$kind',
-      '${DateTime.now().microsecondsSinceEpoch}',
-    ]),
-  );
+  final dir = io.Directory(pathJoin([base.path, 'doctormobile_share']));
   await dir.create(recursive: true);
   return dir;
 }
@@ -256,57 +213,26 @@ Future<io.Directory> legacyApplicationDocumentsDirectory(
   return io.Directory(pathJoin([base.path, ...parts]));
 }
 
-/// Adds up the files under [dir], skipping what it cannot measure.
-///
-/// The figure reaches the user as a size on the storage screen, so a partial
-/// one is a wrong number presented as a fact. Both ways it can go short say
-/// so: files that would not answer their length, and a walk that stopped.
-///
-/// Counted and reported once rather than per file - a folder the OS has
-/// locked fails every entry in it, and a line each is a log nobody reads.
 Future<int> directorySize(io.Directory dir) async {
   if (!await dir.exists()) return 0;
   var total = 0;
-  var skipped = 0;
   try {
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
       if (entity is! io.File) continue;
       try {
         total += await entity.length();
-      } catch (_) {
-        skipped++;
-      }
+      } catch (_) {}
     }
-  } catch (e) {
-    LogService.warn('[Storage] stopped measuring "${dir.path}" early: $e');
-  }
-  if (skipped > 0) {
-    LogService.warn(
-      '[Storage] could not measure $skipped file(s) under "${dir.path}"',
-    );
-  }
+  } catch (_) {}
   return total;
 }
 
-/// Empties [dir], leaving behind what will not delete.
-///
-/// A file held open by another process, or one the OS refuses, used to leave
-/// the screen reporting a cleared cache over a folder that still has things
-/// in it. Reported once with a count, for the same reason as the walk above.
 Future<void> clearDirectory(io.Directory dir) async {
   if (!await dir.exists()) return;
-  var left = 0;
   await for (final entity in dir.list(followLinks: false)) {
     try {
       await entity.delete(recursive: true);
-    } catch (_) {
-      left++;
-    }
-  }
-  if (left > 0) {
-    LogService.warn(
-      '[Storage] could not remove $left entr(ies) from "${dir.path}"',
-    );
+    } catch (_) {}
   }
 }
 

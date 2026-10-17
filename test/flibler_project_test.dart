@@ -3,11 +3,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:qunleashed/pages/flibler/project/controller.dart';
-import 'package:qunleashed/pages/flibler/project/git_source.dart';
-import 'package:qunleashed/pages/flibler/project/page.dart';
-
-import 'firmware_fixture.dart';
+import 'package:doctormobile/pages/flibler/project/controller.dart';
+import 'package:doctormobile/pages/flibler/project/git_source.dart';
+import 'package:doctormobile/pages/flibler/project/page.dart';
+import 'package:doctormobile/theme/theme.dart';
 
 void main() {
   group('repository links', () {
@@ -67,13 +66,12 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(900, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    // The page's title bar shows the device, so the tree carries one - the
-    // page is opened from inside the app's scope. `closeDevice` at the end
-    // rather than a teardown: the controller starts a DFU detector that polls
-    // on a timer wherever libusb is present, and the binding checks for live
-    // timers before tearDown runs.
-    final (device, _) = mountedDevice();
-    await tester.pumpWidget(wrapWithDevice(const FliblerProjectPage(), device));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.dark, const Color(0xFFCC241D)),
+        home: const FliblerProjectPage(),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Flibler'), findsOneWidget);
@@ -88,8 +86,6 @@ void main() {
     expect(find.text('/tmp/project'), findsOneWidget);
 
     expect(tester.takeException(), isNull);
-
-    await closeDevice(tester, device);
   });
 
   test('building waits for a loaded project', () {

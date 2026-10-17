@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.darkflippers" "\0"
-            VALUE "FileDescription", "qUnleashed" "\0"
+            VALUE "CompanyName", "DoctorMobile" "\0"
+            VALUE "FileDescription", "DoctorMobile" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "qunleashed" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.darkflippers. All rights reserved." "\0"
-            VALUE "OriginalFilename", "qunleashed.exe" "\0"
-            VALUE "ProductName", "qUnleashed" "\0"
+            VALUE "InternalName", "doctormobile" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 DoctorMobile. All rights reserved." "\0"
+            VALUE "OriginalFilename", "doctormobile.exe" "\0"
+            VALUE "ProductName", "DoctorMobile" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

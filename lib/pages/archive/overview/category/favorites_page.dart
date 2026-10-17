@@ -1,5 +1,3 @@
-import '../../../../services/archive/sort_settings.dart';
-import '../../../../services/guarded.dart';
 import '../../../../services/localization/l10n.dart';
 
 import 'dart:async';
@@ -19,12 +17,9 @@ import '../../widgets/actions_sheet.dart';
 import '../../../../components/filelist/empty_view.dart';
 import '../widgets/key_actions_sheet.dart';
 import '../../../../components/filelist/columns.dart';
-import '../../../../components/filelist/folder_sort.dart';
 import 'sort.dart';
 import '../../../../components/filelist/table.dart';
 import '../../../../components/filelist/toolbar.dart';
-import '../failure_toast.dart';
-import '../../widgets/drag_source.dart';
 
 /// Lists everything starred — keys of every category plus the favorite apps
 /// read off the device — in the unified table used by the deleted page. Key
@@ -32,18 +27,9 @@ import '../../widgets/drag_source.dart';
 /// app rows have no key metadata, so they trail the keys and leave those
 /// columns blank.
 class FavoritesPage extends StatefulWidget {
-  const FavoritesPage({
-    super.key,
-    required this.controller,
-    required this.sortSettings,
-  });
+  const FavoritesPage({super.key, required this.controller});
 
   final ArchiveController controller;
-
-  /// Shared with every other archive table and owned by `AppShell`, so a sort
-  /// picked here is the one they all open in - and the rail's other mounted
-  /// tables follow it without being rebuilt by hand.
-  final ArchiveSortSettings sortSettings;
 
   @override
   State<FavoritesPage> createState() => _FavoritesPageState();
@@ -56,32 +42,18 @@ class _FavoritesPageState extends State<FavoritesPage> {
 
   String _query = '';
   String? _filterVal;
+  String _sortKey = 'name';
+  bool _sortAsc = true;
 
   bool _selectionMode = false;
   final Set<String> _selected = <String>{};
 
   ArchiveController get _ctrl => widget.controller;
 
-  /// Rebuilds on either the archive's own changes or a sort picked on another
-  /// mounted table. Built once rather than per build, so the `AnimatedBuilder`
-  /// is not resubscribing to a fresh `Listenable` every frame.
-  late final Listenable _repaint = Listenable.merge([
-    _ctrl,
-    widget.sortSettings,
-  ]);
-
-  List<SortOption> get _sortOpts => sortOptionsFor(deletedColumns());
-
-  /// The stored sort, held to the keys this table's columns offer.
-  ({String key, bool asc}) get _sort =>
-      widget.sortSettings.resolve(_sortOpts.map((o) => o.key));
-
   @override
   void initState() {
     super.initState();
-    unawaited(
-      guarded('[Archive] load favourites meta', _ctrl.loadMetaForFavorites),
-    );
+    unawaited(_ctrl.loadMetaForFavorites());
   }
 
   @override
@@ -134,14 +106,11 @@ class _FavoritesPageState extends State<FavoritesPage> {
         return false;
       }).toList();
     }
-    final sort = _sort;
-    return sortArchiveKeys(out, sort.key, sort.asc);
+    return sortArchiveKeys(out, _sortKey, _sortAsc);
   }
 
   /// Apps have no protocol, so an active protocol filter hides them all. They
-  /// carry a name and the folder under `/ext/apps` they were found in and
-  /// nothing else, so those two sorts are the ones they can follow; under any
-  /// other key they hold the name order.
+  /// only ever sort by name, following the name column's direction.
   List<FapFavorite> _visibleFaps(List<FapFavorite> faps) {
     if (_filterVal != null) return const [];
     var out = faps;
@@ -153,31 +122,10 @@ class _FavoritesPageState extends State<FavoritesPage> {
         return false;
       }).toList();
     }
-    final sort = _sort;
-    if (sort.key == 'folder') {
-      // One comparator carrying the name as its tiebreak, rather than a name
-      // sort with a folder sort laid over it. `List.sort` promises no
-      // stability at any length and measurably has none past 32 entries,
-      // where it leaves its insertion-sort path for a dual-pivot quicksort -
-      // so the second pass would hand back each folder's apps in whatever
-      // order it happened to leave them. A favourites list reaches 32.
-      return [...out]..sort(
-        (a, b) => compareFolderThenName(
-          folderSortKey(a.subFolder),
-          a.name.toLowerCase(),
-          folderSortKey(b.subFolder),
-          b.name.toLowerCase(),
-          sort.asc,
-        ),
-      );
-    }
-    // Under every other key the apps have nothing to answer with, so they hold
-    // the name order; only the name itself turns around with the direction.
-    final descending = sort.key == 'name' && !sort.asc;
-    return [...out]..sort((a, b) {
-      final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
-      return descending ? -byName : byName;
-    });
+    out = [...out]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    if (_sortKey == 'name' && !_sortAsc) return out.reversed.toList();
+    return out;
   }
 
   List<ArchiveKey> get _selectedKeys =>
@@ -205,10 +153,6 @@ class _FavoritesPageState extends State<FavoritesPage> {
     });
   }
 
-  void _onDropped() {
-    if (mounted) _exitSelection();
-  }
-
   void _setAllSelected(List<ArchiveKey> filtered, bool selected) {
     setState(() {
       if (selected) {
@@ -221,13 +165,14 @@ class _FavoritesPageState extends State<FavoritesPage> {
   }
 
   void _onSort(String key) {
-    unawaited(
-      guarded(
-        '[ArchiveSort] storing the picked sort',
-        () =>
-            widget.sortSettings.pick(key, offered: _sortOpts.map((o) => o.key)),
-      ),
-    );
+    setState(() {
+      if (_sortKey == key) {
+        _sortAsc = !_sortAsc;
+      } else {
+        _sortKey = key;
+        _sortAsc = true;
+      }
+    });
   }
 
   Future<void> _bulkUnstar() async {
@@ -280,17 +225,12 @@ class _FavoritesPageState extends State<FavoritesPage> {
       return;
     }
     final ok = await _ctrl.launchFapFavorite(fav);
-    // Null: see launchFapFavorite. The tap that started it owns the outcome.
-    if (!mounted || ok == null) return;
+    if (!mounted) return;
     if (ok) {
       unawaited(openRoute(context, AppRoute.remoteControl));
     } else {
       context.showNotification(
-        withArchiveReason(
-          context,
-          context.l10n.archiveLaunchFailed(fav.name),
-          _ctrl.lastFailure,
-        ),
+        context.l10n.archiveLaunchFailed(fav.name),
         type: QNotificationType.error,
       );
     }
@@ -341,7 +281,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
     final headerColor = colors.adaptCategoryHeader(_starColor);
 
     return AnimatedBuilder(
-      animation: _repaint,
+      animation: _ctrl,
       builder: (context, _) {
         final allKeys = _starredKeys();
         final allFaps = _ctrl.fapFavorites;
@@ -393,12 +333,6 @@ class _FavoritesPageState extends State<FavoritesPage> {
                         query: _query,
                         filterVal: _filterVal,
                         filterOpts: filterOpts,
-                        sort: (
-                          key: _sort.key,
-                          asc: _sort.asc,
-                          opts: _sortOpts,
-                          onSort: _onSort,
-                        ),
                         starredOnly: false,
                         catColor: headerColor,
                         colors: colors,
@@ -447,8 +381,8 @@ class _FavoritesPageState extends State<FavoritesPage> {
                           children: [
                             ArchiveColumnHeader(
                               cols: cols,
-                              sortKey: _sort.key,
-                              sortAsc: _sort.asc,
+                              sortKey: _sortKey,
+                              sortAsc: _sortAsc,
                               onSort: _onSort,
                               colors: colors,
                               selectionMode: _selectionMode,
@@ -462,60 +396,40 @@ class _FavoritesPageState extends State<FavoritesPage> {
                                 itemBuilder: (_, i) {
                                   if (i >= keys.length) {
                                     final fap = faps[i - keys.length];
-                                    return FileDragSource(
+                                    return _FapTableRow(
                                       key: ValueKey(fap.remotePath),
-                                      file: DragFile(
-                                        id: fap.remotePath,
-                                        name: fap.fileName,
-                                        load: (progress) => _ctrl.exportBytes(
-                                          fap.remotePath,
-                                          onCancel: progress?.onCancel,
-                                          onProgress: progress?.updateProgress,
-                                        ),
-                                      ),
-                                      child: _FapTableRow(
-                                        favorite: fap,
-                                        cols: cols,
-                                        colors: colors,
-                                        selectionMode: _selectionMode,
-                                        onTap: () => _launchFap(fap),
-                                        onLongPress: () =>
-                                            _showFapActions(context, fap),
-                                      ),
+                                      favorite: fap,
+                                      cols: cols,
+                                      colors: colors,
+                                      selectionMode: _selectionMode,
+                                      onTap: () => _launchFap(fap),
+                                      onLongPress: () =>
+                                          _showFapActions(context, fap),
                                     );
                                   }
                                   final key = keys[i];
-                                  final selected = _selected.contains(
-                                    _keyId(key),
-                                  );
-                                  return ArchiveKeyDragSource(
+                                  return ArchiveTableRow(
                                     key: ValueKey(_keyId(key)),
-                                    archiveKey: key,
-                                    selected: selected,
-                                    selection: () => _selectedKeys,
-                                    onDropped: _onDropped,
-                                    child: ArchiveTableRow(
-                                      flipperKey: key,
-                                      cols: cols,
-                                      colors: colors,
-                                      cat: key.category,
-                                      showCategoryIcon: true,
-                                      progress: _ctrl.progressForKey(key),
-                                      selectionMode: _selectionMode,
-                                      selected: selected,
-                                      onTap: () => _selectionMode
-                                          ? _toggleSelect(key)
-                                          : KeyActionsSheet.show(
-                                              context,
-                                              _ctrl,
-                                              key,
-                                              onToggleFavorite: () =>
-                                                  _ctrl.toggleFavorite(key),
-                                            ),
-                                      onLongPress: () => _selectionMode
-                                          ? _toggleSelect(key)
-                                          : _enterSelection(key),
-                                    ),
+                                    flipperKey: key,
+                                    cols: cols,
+                                    colors: colors,
+                                    cat: key.category,
+                                    showCategoryIcon: true,
+                                    progress: _ctrl.progressForKey(key),
+                                    selectionMode: _selectionMode,
+                                    selected: _selected.contains(_keyId(key)),
+                                    onTap: () => _selectionMode
+                                        ? _toggleSelect(key)
+                                        : KeyActionsSheet.show(
+                                            context,
+                                            _ctrl,
+                                            key,
+                                            onToggleFavorite: () =>
+                                                _ctrl.toggleFavorite(key),
+                                          ),
+                                    onLongPress: () => _selectionMode
+                                        ? _toggleSelect(key)
+                                        : _enterSelection(key),
                                   );
                                 },
                               ),
@@ -536,6 +450,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
 /// line up under the same header, with the key-only columns left blank.
 class _FapTableRow extends StatelessWidget {
   const _FapTableRow({
+    super.key,
     required this.favorite,
     required this.cols,
     required this.colors,

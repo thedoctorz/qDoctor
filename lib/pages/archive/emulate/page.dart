@@ -1,14 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flipperlib/flipperlib.dart' show FlipperClient;
 
 import '../../../services/localization/l10n.dart';
 import '../../../components/icon.dart';
 import '../../../components/navigation.dart';
 import '../../../theme/theme.dart';
 
-import 'package:qunleashed/components/appbar.dart';
+import 'package:doctormobile/components/appbar.dart';
 
 import '../../../components/notification.dart';
 import '../../../components/archive/category.dart';
@@ -16,25 +15,16 @@ import '../../../components/archive/models/key.dart';
 import '../../../services/emulate/service.dart';
 
 class EmulatePage extends StatefulWidget {
-  const EmulatePage({
-    super.key,
-    required this.flipperKey,
-    required this.client,
-  });
+  const EmulatePage({super.key, required this.flipperKey});
 
   final ArchiveKey flipperKey;
-
-  /// The Flipper this run opens on, taken by whoever pushed the page from the
-  /// scope they were in. An emulation belongs to one device from start to
-  /// stop, so which one is not a detail the page should look up itself.
-  final FlipperClient client;
 
   @override
   State<EmulatePage> createState() => _EmulatePageState();
 }
 
 class _EmulatePageState extends State<EmulatePage> {
-  late final EmulateService _service = EmulateService(client: widget.client);
+  final EmulateService _service = EmulateService();
   bool _starting = true;
   bool _running = false;
   bool _closing = false;
@@ -111,14 +101,10 @@ class _EmulatePageState extends State<EmulatePage> {
     Navigator.of(context).pop();
   }
 
-  /// Whether the press this hold started reached the Flipper, so that the
-  /// release can tell a send that did not happen from one that did.
-  bool _pressLanded = true;
-
   Future<void> _onSendDown() async {
     if (!_running || _closing) return;
     setState(() => _sending = true);
-    _pressLanded = await _service.sendPress();
+    await _service.sendPress();
   }
 
   Future<void> _onSendUp() async {
@@ -127,15 +113,7 @@ class _EmulatePageState extends State<EmulatePage> {
       return;
     }
     setState(() => _sending = false);
-    final released = await _service.sendRelease();
-    if (!mounted || (_pressLanded && released)) return;
-    // The button goes back to looking idle either way, which is the whole of
-    // what the user saw before: a send that timed out on a quiet link and one
-    // that worked ended on the same screen. #104.
-    context.showNotification(
-      context.l10n.emuSendFailed,
-      type: QNotificationType.error,
-    );
+    await _service.sendRelease();
   }
 
   @override
@@ -177,7 +155,6 @@ class _EmulatePageState extends State<EmulatePage> {
       child: Scaffold(
         backgroundColor: colors.background,
         appBar: QPageAppBar(
-          client: widget.client,
           title: l10n.emuOpenOnDevice(k.category.title),
           backgroundColor: colors.accent,
           foregroundColor: colors.onAccent,

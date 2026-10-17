@@ -19,7 +19,7 @@ class InfraredBackendException implements Exception {
 class InfraredBackendApi {
   InfraredBackendApi({
     this.host = 'https://infrared.flipperzero.one',
-    this.userAgent = 'qunleashed-infrared',
+    this.userAgent = 'doctormobile-infrared',
   });
 
   final String host;

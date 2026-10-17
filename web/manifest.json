@@ -1,6 +1,6 @@
 {
-    "name": "qUnleashed",
-    "short_name": "qUnleashed",
+    "name": "DoctorMobile",
+    "short_name": "DoctorMobile",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

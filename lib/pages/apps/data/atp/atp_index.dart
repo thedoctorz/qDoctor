@@ -24,7 +24,14 @@ class AtpEntry {
 
   String get displayName => name.isNotEmpty ? name : appId;
 
-  String get installDir => folder.isEmpty ? kAppsRoot : '$kAppsRoot/$folder';
+  String get installDir {
+    var rel = folder.split('/').where((s) => s.isNotEmpty).join('/');
+    for (final prefix in ['ext/apps/', 'apps/']) {
+      if (rel.startsWith(prefix)) rel = rel.substring(prefix.length);
+    }
+    if (rel == 'ext/apps' || rel == 'apps') rel = '';
+    return rel.isEmpty ? kAppsRoot : '$kAppsRoot/$rel';
+  }
 
   String get installPath => '$installDir/$appId.fap';
 

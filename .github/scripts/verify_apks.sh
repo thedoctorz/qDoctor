@@ -30,6 +30,13 @@ set -Eeuo pipefail
 # reject an empty or stub file and small enough never to reject a real one.
 MIN_SNAPSHOT_BYTES=1048576
 
+REQUIRED_JNI=(
+  libapp.so
+  libdoctor_subghz.so
+  libqunleashed_mfkey32.so
+  libqunleashed_hardnested.so
+)
+
 dir="${1:-dist}"
 failures=0
 
@@ -88,16 +95,22 @@ for apk in "${apks[@]}"; do
     || fault "$name has no classes.dex."
 
   for abi in "${want[@]}"; do
-    if ! grep -qxF -- "lib/$abi/libapp.so" <<<"$listing"; then
-      fault "$name has no lib/$abi/libapp.so - the Dart snapshot is missing."
-      continue
-    fi
-    # Present is not the same as populated: a truncated or stub snapshot is
-    # still an app that dies at launch.
-    bytes="$(unzip -p "$apk" "lib/$abi/libapp.so" | wc -c)"
-    if (( bytes < MIN_SNAPSHOT_BYTES )); then
-      fault "$name has a $bytes-byte lib/$abi/libapp.so; expected at least $MIN_SNAPSHOT_BYTES."
-    fi
+    for lib in "${REQUIRED_JNI[@]}"; do
+      if ! grep -qxF -- "lib/$abi/$lib" <<<"$listing"; then
+        if [[ "$lib" == "libapp.so" ]]; then
+          fault "$name has no lib/$abi/libapp.so - the Dart snapshot is missing."
+        else
+          fault "$name has no lib/$abi/$lib."
+        fi
+        continue
+      fi
+      bytes="$(unzip -p "$apk" "lib/$abi/$lib" | wc -c)"
+      if [[ "$lib" == "libapp.so" ]] && (( bytes < MIN_SNAPSHOT_BYTES )); then
+        fault "$name has a $bytes-byte lib/$abi/libapp.so; expected at least $MIN_SNAPSHOT_BYTES."
+      elif (( bytes < 1 )); then
+        fault "$name has an empty lib/$abi/$lib."
+      fi
+    done
   done
 
   # A split carrying an ABI it should not have means the split did not happen.

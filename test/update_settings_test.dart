@@ -1,20 +1,14 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/devices/firmware/directory.dart';
-import 'package:qunleashed/pages/devices/firmware/update_settings.dart';
+import 'package:doctormobile/pages/devices/firmware/directory.dart';
+import 'package:doctormobile/pages/devices/firmware/update_settings.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'kept_lines.dart';
-import 'refusing_prefs.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(recordKeptLines);
-
   final store = UpdateSettingsStore.instance;
 
   setUp(() {
-    clearKeptLines();
     SharedPreferences.setMockInitialValues(const {});
     // The store is a singleton and outlives any one controller, so a test that
     // did not reset it would inherit the previous test's choices.
@@ -102,46 +96,6 @@ void main() {
     });
   });
 
-  // The doc on `remember` promises a line in the log for a choice that did
-  // not persist. Before #313 it kept that promise only for a store that
-  // threw; one that answered `false` - a full disk on Android - was recorded
-  // nowhere, and the selector showed a channel that was gone at the next
-  // launch.
-  group('a choice that did not persist', () {
-    test('says so when the store refuses the write', () async {
-      useRefusingPrefs();
-
-      await store.remember('unlshd', channelId: 'release');
-
-      expect(keptLines.where((l) => l.contains('did not persist')), isNotEmpty);
-    });
-
-    // Two writes, so one line cannot stand for both: a reader has to know
-    // whether the channel or the variant is the one that went back.
-    test('names which of the two went back', () async {
-      useRefusingPrefs();
-
-      await store.remember(
-        'unlshd',
-        channelId: 'release',
-        variant: UnleashedVariant.base,
-      );
-
-      expect(keptLines.where((l) => l.contains('unlshd.channel')), isNotEmpty);
-      expect(keptLines.where((l) => l.contains('unlshd.variant')), isNotEmpty);
-    });
-
-    // #120's rule: the choice stays on screen, and takes itself back at the
-    // next launch. Nothing here reverts it.
-    test('keeps the choice for the rest of the session', () async {
-      useRefusingPrefs();
-
-      await store.remember('unlshd', channelId: 'release');
-
-      expect(store.channelFor('unlshd'), 'release');
-    });
-  });
-
   group('reading what is on disk', () {
     test('a variant this build no longer has keeps the channel', () async {
       onDisk({
@@ -170,15 +124,6 @@ void main() {
       expect(store.channelFor('unlshd'), isNull);
       expect(store.variantFor('unlshd'), UnleashedVariant.compact);
       expect(store.channelFor('ofw'), 'dev');
-
-      // And it says so at a level a release build keeps. Costing only itself
-      // is the whole claim, so the count matters as much as the message: a
-      // read that gave up on the rest of the walk would be one entry too.
-      final kept = keptLines
-          .where((l) => l.contains('[UpdateSettings]'))
-          .toList();
-      expect(kept, hasLength(1));
-      expect(kept.single, contains('"firmware.update.unlshd.channel"'));
     });
 
     test('an empty value reads as no choice', () async {

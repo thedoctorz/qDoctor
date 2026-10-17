@@ -28,9 +28,7 @@ class DeviceInfoWatchService {
 
   void start(FlipperClient client) {
     final gen = ++_gen;
-    unawaited(
-      guarded('[watchInfo] collection loop', () => _runCollection(gen, client)),
-    );
+    unawaited(_runCollection(gen, client));
   }
 
   void stop() {
@@ -67,10 +65,7 @@ class DeviceInfoWatchService {
     try {
       await client.awaitDeviceInfo().timeout(const Duration(seconds: 20));
     } catch (e) {
-      // The whole snapshot, and the only request for it in the session. Every
-      // field on the device screen - name, firmware, hardware - stays blank,
-      // and a blank field says nothing about why it is blank.
-      LogService.warn('[watchInfo] no device info: $e');
+      LogService.info('[watchInfo] device info: $e');
     }
     if (!alive()) return;
 
@@ -85,12 +80,10 @@ class DeviceInfoWatchService {
     // Battery (full)
     try {
       final batch = await client.powerInfo(
-        priority: FlipperRequestPriority.foreground,
+        priority: FlipperRequestPriority.background,
       );
       emit({for (final item in batch.items) 'power.${item.key}': item.value});
     } catch (e) {
-      // Stays at info: the poll in phase 2 asks again every few seconds, so
-      // this one is the first of many rather than the last word.
       LogService.info('[watchInfo] battery initial: $e');
     }
     if (!alive()) return;
@@ -110,9 +103,7 @@ class DeviceInfoWatchService {
         'protobuf_version_minor': '$minor',
       });
     } catch (e) {
-      // Asked once and never again this session, so the version is simply
-      // absent from the device screen from here on.
-      LogService.warn('[watchInfo] no protobuf version: $e');
+      LogService.info('[watchInfo] protobuf: $e');
     }
     if (!alive()) return;
 
@@ -130,9 +121,7 @@ class DeviceInfoWatchService {
             '${_pad(dt.hour)}:${_pad(dt.minute)}:${_pad(dt.second)}',
       });
     } catch (e) {
-      // Also asked once. The clock the device screen shows is whatever was
-      // there before, which is nothing.
-      LogService.warn('[watchInfo] could not read the device clock: $e');
+      LogService.info('[watchInfo] datetime: $e');
     }
     if (!alive()) return;
 
@@ -145,7 +134,7 @@ class DeviceInfoWatchService {
       try {
         final response = await client.storageInfo(
           InfoRequest(path: '/ext/'),
-          priority: FlipperRequestPriority.foreground,
+          priority: FlipperRequestPriority.background,
         );
         final extData = _storageResponseToMap(
           response.single,
@@ -153,26 +142,14 @@ class DeviceInfoWatchService {
         );
         if (extData.isNotEmpty) emit(extData);
       } catch (e) {
-        // The initial read is the one that fills the figure in; a refresh
-        // that fails leaves the last good one on screen, and they run per
-        // storage operation, which is far faster than anyone can act on.
-        if (stage == 'initial') {
-          LogService.warn('[watchInfo] no SD card info: $e');
-        } else {
-          LogService.info('[watchInfo] storage /ext $stage: $e');
-        }
+        LogService.info('[watchInfo] storage /ext $stage: $e');
       }
     }
 
     await fetchExtInfo('initial');
     if (!alive()) return;
 
-    // Storage /int — slow (storageDu), fire-and-forget so periodic loop starts.
-    //
-    // The one reading here that stays background. Everything else this service
-    // asks is short, which is what lets it slip between the frames of a long
-    // write instead of sitting behind it; a directory walk is not, and parked
-    // ahead of the queue it would hold up what the screen actually needs.
+    // Storage /int — slow (storageDu), fire-and-forget so periodic loop starts
     unawaited(
       guarded('[watchInfo] storage /int', () async {
         if (!alive()) return;
@@ -216,10 +193,7 @@ class DeviceInfoWatchService {
               '${_pad(now.hour)}:${_pad(now.minute)}:${_pad(now.second)}',
         });
       } catch (e) {
-        // The user turned "sync time on start" on and it did not happen. The
-        // Flipper keeps whatever time it had, and the setting still reads as
-        // enabled.
-        LogService.warn('[watchInfo] could not set the device clock: $e');
+        LogService.info('[watchInfo] set datetime: $e');
       }
       if (!alive()) return;
     }
@@ -256,16 +230,14 @@ class DeviceInfoWatchService {
         if (!alive()) return;
         if (_freezeCount > 0 ||
             client.storageBusy ||
-            !client.isRpcReady ||
-            client.cliHeld) {
+            client.mode != FlipperMode.rpc ||
+            client.cliExclusive) {
           // The link is occupied; check again after another quiet window.
           scheduleStorageRefresh();
           return;
         }
         lastRefreshAt = clock.elapsed;
-        unawaited(
-          guarded('[watchInfo] refresh', () => fetchExtInfo('refresh')),
-        );
+        unawaited(fetchExtInfo('refresh'));
       });
     }
 
@@ -285,7 +257,7 @@ class DeviceInfoWatchService {
         // A CLI session owns the transport: polling would only throw
         // "RPC switch blocked" every tick and spam the log. Skip quietly and
         // resume once the client is back in RPC mode.
-        if (!client.isRpcReady || client.cliHeld) continue;
+        if (client.mode != FlipperMode.rpc || client.cliExclusive) continue;
         // Frozen while storage operations run: a battery poll queued behind
         // a long transfer would only time out and spam errors.
         if (client.storageBusy) continue;
@@ -294,16 +266,12 @@ class DeviceInfoWatchService {
         if (tick % fullEvery == 0) {
           try {
             final batch = await client.powerInfo(
-              priority: FlipperRequestPriority.foreground,
+              priority: FlipperRequestPriority.background,
             );
             emit({
               for (final item in batch.items) 'power.${item.key}': item.value,
             });
           } catch (e) {
-            // Stays at info, here and below: this is the poll, once every
-            // five seconds for as long as the Flipper is connected. A link
-            // that has gone would be one report per tick for as long as it
-            // lasts, and bury what a reader came for.
             LogService.info('[watchInfo] battery full: $e');
             if (!alive()) break;
           }
@@ -311,7 +279,7 @@ class DeviceInfoWatchService {
           try {
             final batch = await client.propertyGet(
               GetRequest(key: 'pwrinfo.battery.current'),
-              priority: FlipperRequestPriority.foreground,
+              priority: FlipperRequestPriority.background,
             );
             final partial = {
               for (final item in batch.items)

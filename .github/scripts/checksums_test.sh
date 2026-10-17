@@ -31,10 +31,10 @@ echo "checksums.sh"
 # and as expectation.
 names=(
   -leading-dash.bin                       # `--` guards it; without that the run dies
-  QUnleashed_0.13.0_notes.txt             # mixed case pins LC_ALL=C collation
-  qunleashed_0.13.0_linux_x64             # extensionless: a `*.*` glob drops it
-  qunleashed_0.13.0_macos_universal.dmg   # the one the tamper case corrupts
-  qunleashed_0.13.0_windows_x64.exe       # the one the mode-marker case reads
+  DoctorMobile_0.13.0_notes.txt
+  doctormobile_0.13.0_linux_x64
+  doctormobile_0.13.0_macos_universal.dmg
+  doctormobile_0.13.0_windows_x64.exe
 )
 d="$TMP/assets"; mkdir -p "$d"
 for n in "${names[@]}"; do printf '%s\n' "$n" > "$d/$n"; done
@@ -44,7 +44,7 @@ out="$(run "$d")" || fail "a normal run exited non-zero" "$out"
 
 check  "output verifies with sha256sum -c" verify "$d"
 check  "names are bare and the mode is binary" \
-       grep -q " [*]qunleashed_0.13.0_windows_x64.exe$" "$d/SHA256SUMS"
+       grep -q " [*]doctormobile_0.13.0_windows_x64.exe$" "$d/SHA256SUMS"
 
 actual="$(sed 's/^[0-9a-f]* [*]//' "$d/SHA256SUMS")"
 expected="$(printf '%s\n' "${names[@]}")"
@@ -62,7 +62,7 @@ refute "the sums file excludes itself once it exists" \
        grep -q "SHA256SUMS" "$d/SHA256SUMS"
 
 # The failure mode the file exists to catch.
-printf 'tampered\n' > "$d/qunleashed_0.13.0_macos_universal.dmg"
+printf 'tampered\n' > "$d/doctormobile_0.13.0_macos_universal.dmg"
 refute "a tampered asset fails verification" verify "$d"
 
 empty="$TMP/empty"; mkdir -p "$empty"

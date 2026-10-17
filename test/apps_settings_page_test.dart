@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:qunleashed/pages/apps/data/apps_backend.dart';
-import 'package:qunleashed/pages/apps/data/catalog_mode.dart';
-import 'package:qunleashed/pages/option/pages/apps.dart';
-import 'package:qunleashed/theme/theme.dart';
+import 'package:doctormobile/pages/apps/data/apps_backend.dart';
+import 'package:doctormobile/pages/apps/data/catalog_mode.dart';
+import 'package:doctormobile/pages/option/pages/apps.dart';
+import 'package:doctormobile/theme/theme.dart';
 
 Widget _wrap(Widget child) => MaterialApp(
   theme: buildAppTheme(Brightness.dark, const Color(0xFFCC241D)),

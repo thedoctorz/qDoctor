@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:archive/archive_io.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/components/archive_unpack.dart';
-import 'package:qunleashed/pages/tools/infrared/local_repo.dart';
+import 'package:doctormobile/components/archive_unpack.dart';
+import 'package:doctormobile/pages/tools/infrared/local_repo.dart';
 
 /// The IRDB zip wraps its whole tree in one top-level folder, which
 /// `resolveWrappedArchivePath` strips, so every entry name here carries it.

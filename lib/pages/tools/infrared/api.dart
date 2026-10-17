@@ -23,7 +23,7 @@ class IrLibApi {
     this.owner = 'Lucaslhm',
     this.repo = 'Flipper-IRDB',
     this.branch = 'main',
-    this.userAgent = 'qunleashed-irlib',
+    this.userAgent = 'doctormobile-irlib',
     this.token = '',
     this.localRoot = '',
   });

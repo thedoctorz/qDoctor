@@ -1,0 +1,127 @@
+#version 450
+/* Vulkan compute port of psabf.metal (psa_bf_search). Pure 32-bit TEA.
+ * Bindings mirror the Metal buffer indices used by psabf_vulkan.c:
+ *   0: s0[32] schedule   1: s1[32] schedule
+ *   2: found (single uint, atomic gate)   3: out[3] (v0, v1, counter)
+ * Push constants carry the per-tile parameters (w0, w1, start, count, stage).
+ */
+
+layout(local_size_x = 64) in;
+
+const uint TEA_DELTA = 0x9E3779B9u;
+const uint TEA_ROUNDS = 32u;
+const uint PSA_BF1_CONST_U4 = 0x0E0F5C41u;
+const uint PSA_BF1_CONST_U5 = 0x0F5C4123u;
+const uint PSA_BF2_K0 = 0x4039C240u;
+const uint PSA_BF2_K1 = 0xEDA92CABu;
+const uint PSA_BF2_K2 = 0x4306C02Au;
+const uint PSA_BF2_K3 = 0x02192A04u;
+
+layout(std430, binding = 0) readonly buffer S0Buf { uint s0[]; };
+layout(std430, binding = 1) readonly buffer S1Buf { uint s1[]; };
+layout(std430, binding = 2) buffer FoundBuf { uint found; };
+layout(std430, binding = 3) buffer OutBuf { uint outv[]; };
+
+layout(push_constant) uniform Params {
+    uint w0;
+    uint w1;
+    uint start;
+    uint count;
+    uint stage;
+} p;
+
+void tea_encrypt_sched(inout uint a, inout uint b) {
+    for(uint i = 0u; i < TEA_ROUNDS; i++) {
+        a += s0[i] ^ (((b >> 5) ^ (b << 4)) + b);
+        b += s1[i] ^ (((a >> 5) ^ (a << 4)) + a);
+    }
+}
+
+void tea_decrypt(inout uint a, inout uint b, uint k0, uint k1, uint k2, uint k3) {
+    uint k[4] = uint[4](k0, k1, k2, k3);
+    uint sum = TEA_DELTA * TEA_ROUNDS;
+    for(uint i = 0u; i < TEA_ROUNDS; i++) {
+        uint temp = k[(sum >> 11) & 3u] + sum;
+        sum -= TEA_DELTA;
+        b -= temp ^ (((a >> 5) ^ (a << 4)) + a);
+        temp = k[sum & 3u] + sum;
+        a -= temp ^ (((b >> 5) ^ (b << 4)) + b);
+    }
+}
+
+uint tea_crc(uint v0, uint v1) {
+    uint crc = ((v0 >> 24) & 0xFFu) + ((v0 >> 16) & 0xFFu) + ((v0 >> 8) & 0xFFu) + (v0 & 0xFFu);
+    crc += ((v1 >> 24) & 0xFFu) + ((v1 >> 16) & 0xFFu) + ((v1 >> 8) & 0xFFu);
+    return crc & 0xFFu;
+}
+
+uint crc16_bf2(uint v0, uint v1) {
+    uint bytes[6] = uint[6](
+        (v0 >> 24) & 0xFFu,
+        (v0 >> 8) & 0xFFu,
+        (v0 >> 16) & 0xFFu,
+        v0 & 0xFFu,
+        (v1 >> 24) & 0xFFu,
+        (v1 >> 16) & 0xFFu);
+    uint crc = 0u;
+    for(uint i = 0u; i < 6u; i++) {
+        crc = crc ^ (bytes[i] << 8);
+        for(uint j = 0u; j < 8u; j++) {
+            if((crc & 0x8000u) != 0u) {
+                crc = ((crc << 1) ^ 0x8005u) & 0xFFFFu;
+            } else {
+                crc = (crc << 1) & 0xFFFFu;
+            }
+        }
+    }
+    return crc & 0xFFFFu;
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if(gid >= p.count) {
+        return;
+    }
+    if(found != 0u) {
+        return;
+    }
+
+    uint counter = p.start + gid;
+    uint dec_v0 = p.w0;
+    uint dec_v1 = p.w1;
+    bool hit = false;
+
+    if(p.stage == 1u) {
+        uint wk2 = PSA_BF1_CONST_U4;
+        uint wk3 = counter;
+        tea_encrypt_sched(wk2, wk3);
+        uint wk0 = (counter << 8) | 0x0Eu;
+        uint wk1 = PSA_BF1_CONST_U5;
+        tea_encrypt_sched(wk0, wk1);
+        tea_decrypt(dec_v0, dec_v1, wk0, wk1, wk2, wk3);
+        if(((counter & 0xFFFFFFu) == (dec_v0 >> 8)) && (tea_crc(dec_v0, dec_v1) == (dec_v1 & 0xFFu))) {
+            hit = true;
+        }
+    } else {
+        tea_decrypt(
+            dec_v0,
+            dec_v1,
+            PSA_BF2_K0 ^ counter,
+            PSA_BF2_K1 ^ counter,
+            PSA_BF2_K2 ^ counter,
+            PSA_BF2_K3 ^ counter);
+        if(((counter & 0xFFFFFFu) == (dec_v0 >> 8)) &&
+           (crc16_bf2(dec_v0, dec_v1) == (dec_v1 & 0xFFFFu))) {
+            hit = true;
+        }
+    }
+
+    if(!hit) {
+        return;
+    }
+    if(atomicCompSwap(found, 0u, 1u) == 0u) {
+        outv[0] = dec_v0;
+        outv[1] = dec_v1;
+        outv[2] = counter;
+    }
+}

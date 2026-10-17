@@ -64,7 +64,7 @@ class AppActionButton extends StatelessWidget {
           primary: _buildButton(
             label: l10n.appActionInstall,
             color: colors.accent,
-            onTap: _install,
+            onTap: () => _install(context),
           ),
         );
       case CatalogAppState.update:
@@ -73,7 +73,7 @@ class AppActionButton extends StatelessWidget {
           primary: _buildButton(
             label: l10n.appActionUpdate,
             color: colors.success,
-            onTap: _install,
+            onTap: () => _install(context),
           ),
           secondary: _DeleteButton(
             size: size,
@@ -152,20 +152,18 @@ class AppActionButton extends StatelessWidget {
     );
   }
 
-  void _install() {
-    engine.installOrUpdate(app, category: category, detail: detail);
+  void _install(BuildContext host) {
+    final alias = app.alias;
+    engine.installOrUpdate(app, category: category, detail: detail).then((ok) {
+      if (!host.mounted) return;
+      final message = engine.consumeFailure(alias);
+      if (ok || message == null) return;
+      host.showNotification(message, type: QNotificationType.error);
+    });
   }
 
-  Future<void> _launchApp(BuildContext context) => launchApp(
-    context,
-    () => engine.launch(app, category: category),
-    // The *path*, resolved the way the engine resolves it, because the app
-    // manager and the installer key on a path too: keyed on the alias here,
-    // the same app launched from the catalog and from the manager passed both
-    // guards and still gave two screen streams. The alias is the fallback for
-    // an app with no installed manifest, which cannot be launched anyway.
-    target: engine.manifests.byAlias(app.alias)?.path ?? app.alias,
-  );
+  Future<void> _launchApp(BuildContext context) =>
+      launchApp(context, () => engine.launch(app, category: category));
 
   Future<void> _confirmDelete(BuildContext context) =>
       confirmDeleteApp(context, engine: engine, app: app, category: category);

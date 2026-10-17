@@ -29,6 +29,7 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 add_dependencies(${BINARY_NAME} qunleashed_mfkey32)
 add_dependencies(${BINARY_NAME} qunleashed_hardnested)
 add_dependencies(${BINARY_NAME} qunleashed_faaccrack)
+add_dependencies(${BINARY_NAME} doctor_subghz)
 
 # Its own variable, not `PLUGIN_BUNDLED_LIBRARIES`, which is what this used to
 # append to. That does not survive: `flutter/generated_plugins.cmake` carries a
@@ -48,5 +49,6 @@ set(QUNLEASHED_FFI_LIBRARIES
   $<TARGET_FILE:qunleashed_mfkey32>
   $<TARGET_FILE:qunleashed_hardnested>
   $<TARGET_FILE:qunleashed_faaccrack>
+  $<TARGET_FILE:doctor_subghz>
   PARENT_SCOPE
 )

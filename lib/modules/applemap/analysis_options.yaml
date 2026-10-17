@@ -1,0 +1,11 @@
+analyzer:
+  exclude:
+    - build/**
+    - ios/**
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # A Future-returning statement in an async body with no unawaited() around
+    # it: either it should have been awaited, or saying so is free.
+    - unawaited_futures

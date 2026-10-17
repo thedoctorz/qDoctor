@@ -9,15 +9,13 @@ import '../pages/option/page.dart';
 import '../pages/tools/paint/editor/page.dart';
 import '../pages/tools/plotter/page.dart';
 import '../pages/tools/remote/desktop/page.dart';
-import '../pages/devices/device_scope.dart';
+import '../pages/tools/subghz/decode_raw/decode_raw_page.dart';
+import '../pages/tools/subghz/live_rx/live_rx_page.dart';
 
 /// Binds every cross-feature route to the page that implements it. This is the
 /// only place that knows about all feature pages at once.
 void registerAppRoutes() {
-  registerRoute(
-    AppRoute.remoteControl,
-    (context, _) => RemoteControlPage(client: DeviceScope.of(context).client),
-  );
+  registerRoute(AppRoute.remoteControl, (_, _) => const RemoteControlPage());
   registerRoute(AppRoute.pixelEditor, (_, args) {
     final editor = args as PixelEditorArgs;
     return PaintPage(remotePath: editor.remotePath, client: editor.client);
@@ -26,10 +24,11 @@ void registerAppRoutes() {
     final plot = args as PlotterArgs?;
     return PulsePlotterPage(initialBytes: plot?.bytes, initialName: plot?.name);
   });
-  registerRoute(
-    AppRoute.archiveMap,
-    (context, _) => FlipperMapPage(client: DeviceScope.of(context).client),
-  );
+  registerRoute(AppRoute.decodeRaw, (_, args) {
+    return DecodeRawPage(args: args as DecodeRawArgs?);
+  });
+  registerRoute(AppRoute.subghzLiveRx, (_, _) => const LiveRxPage());
+  registerRoute(AppRoute.archiveMap, (_, _) => const FlipperMapPage());
   registerRoute(AppRoute.fliblerProject, (_, _) => const FliblerProjectPage());
   registerRoute(AppRoute.appSettings, (_, _) => const SettingsPage());
   registerRoute(AppRoute.mapSettings, (_, _) => const MapSettingsPage());

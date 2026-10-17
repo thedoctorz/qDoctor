@@ -1,62 +1,98 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
-import '../../../../components/cancel_spinner.dart';
-import '../../../../components/dialogs/connection.dart';
-import '../../../../services/connection/link_service.dart';
-import '../../../../services/guarded.dart';
 import '../../../../services/localization/l10n.dart';
+import '../../../../components/dialogs/connection.dart';
+import '../../../../components/dialogs/connection_error.dart';
+import '../../../../services/connection/known_devices.dart';
 import '../../../../theme/theme.dart';
 import '../page_card.dart';
+import '../../controllers/device.dart';
+import '../../device_scope.dart';
 
 class ConnectCard extends StatelessWidget {
   const ConnectCard({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final ctrl = DeviceScope.of(context);
     final colors = context.appColors;
-    final links = LinkService.instance;
+    final known = ctrl.knownDevices;
+    final usb = ctrl.usbSessions;
 
-    return ListenableBuilder(
-      listenable: links,
-      builder: (context, _) {
-        final entries = links.entries;
-        return FlipperPageCard(
-          child: Column(
-            children: [
-              _ConnectActionRow(
-                color: colors.accent,
-                onTap: () => promptConnectDevice(context),
-              ),
-              for (final entry in entries) ...[
-                Divider(height: 1, color: colors.divider),
-                _DeviceRow(
-                  entry: entry,
-                  onTap: () => connectLinkEntry(context, entry),
-                  // Both tear a Future off into a VoidCallback, so a
-                  // rejection reached only PlatformDispatcher.onError and
-                  // arrived in the log as an unlabelled [uncaught] with no
-                  // operation on it. Named, so a bug report says which. #120.
-                  onDisconnect: () => unawaited(
-                    guarded('[ConnectCard] disconnect', () async {
-                      await links.disconnect(entry);
-                    }),
-                  ),
-                  onForget: entry.isBle && !entry.held
-                      ? () => unawaited(
-                          guarded('[ConnectCard] forget', () async {
-                            await links.forget(entry);
-                          }),
-                        )
-                      : null,
-                ),
-              ],
-            ],
+    return FlipperPageCard(
+      child: Column(
+        children: [
+          _ConnectActionRow(
+            color: colors.accent,
+            onTap: () => _openPicker(context),
           ),
-        );
-      },
+          for (final session in usb) ...[
+            Divider(height: 1, color: colors.divider),
+            _DeviceRow(
+              name: session.device.name,
+              isUsb: true,
+              online: true,
+              active: session.active,
+              sessionConnected: session.connected,
+              busy: false,
+              onTap: () => ctrl.activateSession(session.device),
+              onDisconnect: () => ctrl.disconnectSession(session.device),
+            ),
+          ],
+          for (var i = 0; i < known.length; i++) ...[
+            Divider(height: 1, color: colors.divider),
+            _DeviceRow(
+              name: known[i].name,
+              idLabel: known[i].id,
+              isUsb: false,
+              online: ctrl.isKnownPresent(known[i]),
+              active: ctrl.isKnownActive(known[i]),
+              sessionConnected: ctrl.isKnownSessionConnected(known[i]),
+              busy: _isBusy(ctrl, known[i]),
+              onTap: () => _connectKnown(context, known[i]),
+              onForget: () => ctrl.forgetKnown(known[i]),
+              onDisconnect: () => ctrl.disconnectKnown(known[i]),
+            ),
+          ],
+        ],
+      ),
     );
+  }
+
+  static bool _isBusy(DeviceController ctrl, KnownDevice known) {
+    if (ctrl.connectingKnownId == known.id) return true;
+    if (ctrl.searching && ctrl.knownDevices.firstOrNull?.id == known.id) {
+      return true;
+    }
+    final connecting = ctrl.client.connectingDevice;
+    return connecting != null && known.matches(connecting);
+  }
+
+  static Future<void> _connectKnown(
+    BuildContext context,
+    KnownDevice known,
+  ) async {
+    final ctrl = DeviceScope.of(context);
+    try {
+      await ctrl.connectKnown(known);
+    } catch (e) {
+      if (!context.mounted) return;
+      await showConnectionFailedDialog(context, e, isBle: true);
+    }
+  }
+
+  static Future<void> _openPicker(BuildContext context) async {
+    if (!context.mounted) return;
+    final selected = await showConnectionDialog(context);
+    if (selected == null || !context.mounted) return;
+
+    final ctrl = DeviceScope.of(context);
+    try {
+      await ctrl.connect(selected);
+    } catch (e) {
+      if (!context.mounted) return;
+      await showConnectionFailedDialog(context, e, isBle: selected.isBle);
+    }
   }
 }
 
@@ -97,43 +133,39 @@ class _ConnectActionRow extends StatelessWidget {
 
 class _DeviceRow extends StatelessWidget {
   const _DeviceRow({
-    required this.entry,
+    required this.name,
+    required this.isUsb,
+    required this.online,
+    required this.active,
+    required this.sessionConnected,
+    required this.busy,
     required this.onTap,
     required this.onDisconnect,
+    this.idLabel,
     this.onForget,
   });
 
-  final LinkEntry entry;
+  final String name;
+  final String? idLabel;
+  final bool isUsb;
+  final bool online;
+  final bool active;
+  final bool sessionConnected;
+  final bool busy;
   final VoidCallback onTap;
-  final VoidCallback onDisconnect;
   final VoidCallback? onForget;
-
-  String _subtitle(BuildContext context) {
-    final strings = context.l10n;
-    if (entry.busy) return strings.pickerConnecting;
-    switch (entry.session) {
-      case LinkSession.active:
-        return strings.connectActive;
-      case LinkSession.connected:
-        return strings.connectTapToSwitch;
-      case LinkSession.connecting:
-        return strings.pickerConnecting;
-      case LinkSession.none:
-        return entry.address;
-    }
-  }
-
-  Color _iconColor(QAppColors colors) {
-    if (entry.session == LinkSession.active) return colors.accent;
-    if (entry.held) return colors.info;
-    return entry.isBle && entry.heard ? colors.info : colors.textMuted;
-  }
+  final VoidCallback onDisconnect;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    final active = entry.session == LinkSession.active;
-    final busy = entry.busy;
+    final subtitle = busy
+        ? context.l10n.pickerConnecting
+        : active
+        ? context.l10n.connectActive
+        : sessionConnected
+        ? context.l10n.connectTapToSwitch
+        : (idLabel ?? '');
 
     return Material(
       color: Colors.transparent,
@@ -144,13 +176,17 @@ class _DeviceRow extends StatelessWidget {
           child: Row(
             children: [
               Icon(
-                entry.isUsb
-                    ? (entry.held ? Icons.cable : Icons.usb)
-                    : entry.held
+                isUsb
+                    ? Icons.usb
+                    : active || sessionConnected
                     ? Icons.bluetooth_connected
                     : Icons.bluetooth,
                 size: 24,
-                color: _iconColor(colors),
+                color: active
+                    ? colors.accent
+                    : (online || sessionConnected)
+                    ? colors.info
+                    : colors.textMuted,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -158,7 +194,7 @@ class _DeviceRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      entry.name,
+                      name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -169,7 +205,7 @@ class _DeviceRow extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      _subtitle(context),
+                      subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 12, color: colors.textMuted),
@@ -179,11 +215,15 @@ class _DeviceRow extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               if (busy)
-                // A connect in flight is stopped from the row that started it.
-                // Before this the only way out was the search dialog, which
-                // holds the same session behind a second cancel button.
-                QCancelSpinner(onCancel: onDisconnect, size: 20)
-              else if (entry.held)
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: colors.accent,
+                  ),
+                )
+              else if (active || sessionConnected)
                 Tooltip(
                   message: context.l10n.pickerDisconnect,
                   child: InkResponse(

@@ -2,11 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/media_remote.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/models/models.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/media_remote.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/models/models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'refusing_prefs.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
+import 'package:shared_preferences_platform_interface/types.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -85,7 +85,7 @@ void main() {
     final preferences = await SharedPreferences.getInstance();
     final nativeCalls = <String>[];
     var attempts = 0;
-    const channel = MethodChannel('qunleashed/media_remote');
+    const channel = MethodChannel('doctormobile/media_remote');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(channel, (call) async {
@@ -122,7 +122,7 @@ void main() {
   test('native start failure is surfaced and can be retried', () async {
     final nativeCalls = <String>[];
     var failStart = true;
-    const channel = MethodChannel('qunleashed/media_remote');
+    const channel = MethodChannel('doctormobile/media_remote');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(channel, (call) async {
@@ -198,7 +198,7 @@ void main() {
       final preferences = await SharedPreferences.getInstance();
       final loadGate = Completer<SharedPreferences>();
       final nativeCalls = <String>[];
-      const channel = MethodChannel('qunleashed/media_remote');
+      const channel = MethodChannel('doctormobile/media_remote');
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(channel, (call) async {
@@ -228,7 +228,7 @@ void main() {
       'remote.media.enabled': true,
     });
     final nativeCalls = <String>[];
-    const channel = MethodChannel('qunleashed/media_remote');
+    const channel = MethodChannel('doctormobile/media_remote');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(channel, (call) async {
@@ -260,7 +260,7 @@ void main() {
 
   test('MediaSession is opt-in and follows the enabled setting', () async {
     final nativeCalls = <String>[];
-    const channel = MethodChannel('qunleashed/media_remote');
+    const channel = MethodChannel('doctormobile/media_remote');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(channel, (call) async {
@@ -307,7 +307,13 @@ void main() {
   });
 
   test('a failed write is not reported as a failed start', () async {
-    useRefusingPrefs();
+    SharedPreferencesStorePlatform.instance = _FailingStore();
+    SharedPreferences.resetStatic();
+    addTearDown(() {
+      SharedPreferencesStorePlatform.instance =
+          InMemorySharedPreferencesStore.empty();
+      SharedPreferences.resetStatic();
+    });
 
     final bridge = MediaRemoteBridge(
       onButton: (_, _) {},
@@ -329,4 +335,36 @@ void main() {
     );
     expect(bridge.enabled, isFalse, reason: 'nothing was persisted');
   });
+}
+
+/// A store whose writes report failure, like a full or corrupt prefs file.
+class _FailingStore extends SharedPreferencesStorePlatform {
+  final Map<String, Object> _values = {};
+
+  @override
+  Future<bool> clear() async => false;
+
+  @override
+  Future<bool> clearWithParameters(ClearParameters parameters) async => false;
+
+  @override
+  Future<bool> clearWithPrefix(String prefix) async => false;
+
+  @override
+  Future<Map<String, Object>> getAll() async => _values;
+
+  @override
+  Future<Map<String, Object>> getAllWithParameters(
+    GetAllParameters parameters,
+  ) async => _values;
+
+  @override
+  Future<Map<String, Object>> getAllWithPrefix(String prefix) async => _values;
+
+  @override
+  Future<bool> remove(String key) async => false;
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) async =>
+      false;
 }

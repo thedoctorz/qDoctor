@@ -68,17 +68,8 @@ class FlipperNetworkResponder {
   }
 
   void _onConnection(FlipperConnectionState state) {
-    // Not on a switch. What the client owes a Flipper it is fetching for does
-    // not depend on which one the user is looking at: a second Flipper sitting
-    // in a warm session keeps its sockets and keeps getting answered.
-    //
-    // Known gap: this asks about the active session, so a request being served
-    // for one Flipper survives that Flipper going away while another is in
-    // focus, and dies when the one in focus goes away instead. Closing the
-    // right ones needs the connections keyed by the session that opened them,
-    // which they are not.
-    if (!state.rpcReady) {
-      unawaited(guarded('[Network] close all on link loss', _closeAll));
+    if (!state.connected || state.mode != FlipperMode.rpc) {
+      unawaited(_closeAll());
     }
   }
 
@@ -123,25 +114,11 @@ class FlipperNetworkResponder {
   /// a failed send would never run - no teardown, no traffic accounting, and no
   /// NetworkCloseResponse, leaving the firmware app blocked until its own
   /// timeout.
-  /// Queues [handler] behind whatever is already running for connection [id],
-  /// bound to the Flipper that asked.
-  ///
-  /// A responder answers the device that spoke to it, and this is the moment
-  /// that device is known: the request has just arrived from the active
-  /// session. Everything the handler then does - reading the file to send,
-  /// saving the reply, the response frame itself - takes minutes over a slow
-  /// link, and without the binding a device switch during any of it would save
-  /// somebody else's download onto the wrong Flipper and answer a request it
-  /// never made.
   void _enqueueHandler(int id, String what, Future<void> Function() handler) {
-    final binding = _client.bindCurrentSession();
     final previous = _handlerChains[id] ?? Future<void>.value();
     late final Future<void> next;
-    next =
-        guarded(
-          '[Network] $what $id',
-          () => previous.then((_) => binding.run(handler)),
-        ).whenComplete(() {
+    next = guarded('[Network] $what $id', () => previous.then((_) => handler()))
+        .whenComplete(() {
           if (identical(_handlerChains[id], next)) {
             _handlerChains.remove(id);
           }
@@ -389,10 +366,7 @@ class FlipperNetworkResponder {
     try {
       List<int>? body;
       if (request.sendPath.isNotEmpty) {
-        body = await _client.storageReadChunked(
-          request.sendPath,
-          priority: FlipperRequestPriority.unattended,
-        );
+        body = await _client.storageReadChunked(request.sendPath);
       } else if (request.body.isNotEmpty) {
         body = request.body;
       }
@@ -422,12 +396,10 @@ class FlipperNetworkResponder {
         }
         final size = bytes.length;
         NetworkTrafficMonitor.instance.recordRx(size);
-        // Owed to the Flipper that asked, focus or not, and ahead of bulk: it
-        // is blocked waiting for this.
         await _client.storageWriteChunked(
           request.savePath,
           bytes.takeBytes(),
-          priority: FlipperRequestPriority.unattended,
+          priority: FlipperRequestPriority.background,
         );
         await _sendHttpResponse(
           id,
@@ -455,11 +427,7 @@ class FlipperNetworkResponder {
     } on FlipperWriteCancelledException {
       await _sendHttpError(id, ErrorCode.FILE_ERROR);
     } catch (error) {
-      // The line below tells the device, with a code it maps from the same
-      // exception. §5 is about the reader that is not the device: one of these
-      // per request the Flipper makes is bounded by what the user is browsing,
-      // unlike the relay reply below, which runs per frame and stays at `info`.
-      LogService.caught('[Network] http failed on $id: $error');
+      LogService.info('[Network] http failed on $id: $error');
       await _sendHttpError(id, _errorFor(error));
     }
   }
@@ -476,16 +444,7 @@ class FlipperNetworkResponder {
 
   void _emitInbound(int id, List<int> data, bool binary) {
     for (final piece in chunkByteViews(asBytes(data), maxChunkSize)) {
-      // Per chunk rather than around the loop: hoisting the guard would make
-      // these sequential, and the order these reach the Flipper is the RPC
-      // queue's business rather than this loop's. A dead session fails every
-      // chunk with the same text, which the fold in `LogService` sends once.
-      unawaited(
-        guarded(
-          '[Network] forward inbound on $id',
-          () => _sendReceiveData(id, piece, binary),
-        ),
-      );
+      unawaited(_sendReceiveData(id, piece, binary));
     }
   }
 
@@ -506,27 +465,16 @@ class FlipperNetworkResponder {
       guarded('[Network] teardown on $id', () => _teardown(connection)),
     );
     NetworkTrafficMonitor.instance.connectionClosed();
-    unawaited(
-      guarded(
-        '[Network] report error on $id',
-        () => _sendStateChanged(id, ConnectionState.ERROR, _errorFor(error)),
-      ),
-    );
+    unawaited(_sendStateChanged(id, ConnectionState.ERROR, _errorFor(error)));
   }
 
   void _onSocketDone(int id) {
     final connection = _connections.remove(id);
     if (connection == null) return;
-    unawaited(
-      guarded('[Network] teardown on $id', () => _teardown(connection)),
-    );
+    unawaited(_teardown(connection));
     NetworkTrafficMonitor.instance.connectionClosed();
     unawaited(
-      guarded(
-        '[Network] report close on $id',
-        () =>
-            _sendStateChanged(id, ConnectionState.DISCONNECTED, ErrorCode.NONE),
-      ),
+      _sendStateChanged(id, ConnectionState.DISCONNECTED, ErrorCode.NONE),
     );
   }
 
@@ -734,9 +682,6 @@ class FlipperNetworkResponder {
     try {
       await _client.sendRpc(message, priority: priority);
     } catch (error) {
-      // Stays at info: this is the reply path for every relayed frame, so on
-      // a busy socket it runs thousands of times. There is no batch boundary
-      // to tally at either - the relay is live, not a pass over a list.
       LogService.info('[Network] failed to send response: $error');
     }
   }

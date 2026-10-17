@@ -2,15 +2,12 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-APP_NAME="qunleashed"
+APP_NAME="doctormobile"
 
 # shellcheck source=../android_abis.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/android_abis.sh"
 DIST_DIR="$ROOT_DIR/dist"
-# The asset version, which carries the channel suffix and build number on a
-# dev build so its filenames differ from the release of the same cycle.
-# Falls back to the numeric name, then to pubspec.
-VERSION_NAME="${QUNLEASHED_ASSET_VERSION:-${QUNLEASHED_VERSION_NAME:-}}"
+VERSION_NAME="${DOCTORMOBILE_VERSION_NAME:-}"
 
 if [[ -z "$VERSION_NAME" ]]; then
   VERSION_NAME="$(sed -nE 's/^version:[[:space:]]*([0-9A-Za-z._-]+).*/\1/p' "$ROOT_DIR/pubspec.yaml" | head -n 1)"
@@ -18,7 +15,7 @@ if [[ -z "$VERSION_NAME" ]]; then
 fi
 
 if [[ -z "$VERSION_NAME" ]]; then
-  echo "App version not found. Set QUNLEASHED_ASSET_VERSION or pubspec.yaml version." >&2
+  echo "App version not found. Set DOCTORMOBILE_VERSION_NAME or pubspec.yaml version." >&2
   exit 1
 fi
 
@@ -35,7 +32,7 @@ fi
 mkdir -p "$DIST_DIR"
 
 echo "Using Flutter: $FLUTTER_BIN"
-read -r -a FLUTTER_BUILD_ARGS <<< "${QUNLEASHED_FLUTTER_BUILD_ARGS:-}"
+read -r -a FLUTTER_BUILD_ARGS <<< "${DOCTORMOBILE_FLUTTER_BUILD_ARGS:-}"
 
 echo "Building Android universal APK..."
 (cd "$ROOT_DIR" && "$FLUTTER_BIN" build apk --release "${FLUTTER_BUILD_ARGS[@]}")

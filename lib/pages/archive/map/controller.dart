@@ -29,8 +29,9 @@ enum MapLocationStatus {
 }
 
 class MapToolController extends ChangeNotifier with WidgetsBindingObserver {
-  MapToolController({required this._client, ArchiveStorage? storage})
-    : _storage = storage ?? ArchiveStorage();
+  MapToolController({ArchiveStorage? storage, FlipperClient? client})
+    : _storage = storage ?? ArchiveStorage(),
+      _client = client ?? FlipperOneClient().get();
 
   final ArchiveStorage _storage;
   final FlipperClient _client;
@@ -41,6 +42,7 @@ class MapToolController extends ChangeNotifier with WidgetsBindingObserver {
 
   bool _loading = false;
   String? _loadError;
+  String? _syncHint;
   List<MapPin> _pins = const [];
   MapLocationStatus _locationStatus = MapLocationStatus.idle;
   String? _locationError;
@@ -64,6 +66,10 @@ class MapToolController extends ChangeNotifier with WidgetsBindingObserver {
   double? get userBearingDegrees => _userBearingDegrees;
   GpsFix? get devicePosition => _devicePosition;
   bool get isFlipperConnected => _client.isConnected;
+
+  String? get syncHint => _syncHint;
+
+  bool get needsArchiveSync => _syncHint != null;
 
   /// Every state change funnels through here: the async paths below outlive the
   /// page whenever it is closed mid-request, and a bare notifyListeners() on a
@@ -141,37 +147,84 @@ class MapToolController extends ChangeNotifier with WidgetsBindingObserver {
     return _storage.readLastDeviceName();
   }
 
-  Future<void> loadFiles() async {
+  Future<void>? _loadInFlight;
+
+  Future<void> loadFiles() {
+    final running = _loadInFlight;
+    if (running != null) return running;
+    final started = _loadFiles();
+    _loadInFlight = started;
+    return started.whenComplete(() {
+      if (identical(_loadInFlight, started)) _loadInFlight = null;
+    });
+  }
+
+  Future<void> _loadFiles() async {
     if (_disposed) return;
     _loading = true;
     _loadError = null;
+    _syncHint = null;
     _notify();
     try {
+      final out = <MapPin>[];
+      var sawLocationFiles = false;
+
       final deviceName = await _resolveDeviceName();
       if (_disposed) return;
-      if (deviceName == null || deviceName.isEmpty) {
-        _pins = const [];
-        _loadError = l10n.mapNoSyncedFlipper;
-        return;
+      if (deviceName != null && deviceName.isNotEmpty) {
+        final entries = await _storage.listAll(
+          deviceName,
+          includeSubfolders: _scanSubfolders,
+        );
+        if (_disposed) return;
+        for (final entry in entries) {
+          if (!entry.category.locationSupport) continue;
+          sawLocationFiles = true;
+          final pin = await _parseFile(entry);
+          if (pin == null) continue;
+          out.add(pin);
+        }
       }
-      final entries = await _storage.listAll(
-        deviceName,
-        includeSubfolders: _scanSubfolders,
-      );
-      if (_disposed) return;
-      final out = <MapPin>[];
-      for (final entry in entries) {
-        if (!entry.category.locationSupport) continue;
-        final pin = await _parseFile(entry);
-        if (pin != null) out.add(pin);
-      }
+
       _pins = out;
+      if (out.isEmpty && (deviceName == null || deviceName.isEmpty)) {
+        _syncHint = l10n.mapNoSyncedFlipper;
+      } else if (out.isEmpty && !sawLocationFiles) {
+        _syncHint = l10n.mapSyncToSeeLocations;
+      }
     } catch (e) {
       _loadError = '$e';
     } finally {
       _loading = false;
       _notify();
     }
+  }
+
+  static ({double latitude, double longitude})? _readCoordinates(
+    String content,
+  ) {
+    double? lat;
+    double? lon;
+    for (final raw in content.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      final lower = line.toLowerCase();
+      final colon = line.indexOf(':');
+      if (colon < 0) continue;
+      final value = line.substring(colon + 1).trim();
+      if (lower.startsWith('latitude:') ||
+          lower.startsWith('latitute:') ||
+          lower.startsWith('lat:')) {
+        lat = double.tryParse(value);
+      } else if (lower.startsWith('longitude:') ||
+          lower.startsWith('lon:') ||
+          lower.startsWith('lng:')) {
+        lon = double.tryParse(value);
+      }
+    }
+    if (lat == null || lon == null) return null;
+    if (lat == 0 && lon == 0) return null;
+    return (latitude: lat, longitude: lon);
   }
 
   String _remotePathFor(LocalKeyEntry entry) {
@@ -187,28 +240,8 @@ class MapToolController extends ChangeNotifier with WidgetsBindingObserver {
       if (!await file.exists()) return null;
       final content = await file.readAsString();
 
-      // Parse geo-coordinates (not handled by archive metadata parser)
-      double? lat;
-      double? lon;
-      for (final raw in content.split('\n')) {
-        final line = raw.trim();
-        if (line.isEmpty) continue;
-        final lower = line.toLowerCase();
-        final colon = line.indexOf(':');
-        if (colon < 0) continue;
-        final value = line.substring(colon + 1).trim();
-        if (lower.startsWith('latitude:') ||
-            lower.startsWith('latitute:') ||
-            lower.startsWith('lat:')) {
-          lat = double.tryParse(value);
-        } else if (lower.startsWith('longitude:') ||
-            lower.startsWith('lon:') ||
-            lower.startsWith('lng:')) {
-          lon = double.tryParse(value);
-        }
-      }
-      if (lat == null || lon == null) return null;
-      if (lat == 0 && lon == 0) return null;
+      final coordinates = _readCoordinates(content);
+      if (coordinates == null) return null;
 
       final meta = await parseArchiveKeyMeta(entry.category, entry.path);
       return MapPin(
@@ -220,8 +253,8 @@ class MapToolController extends ChangeNotifier with WidgetsBindingObserver {
         subFolder: entry.subFolder,
         category: entry.category,
         remotePath: _remotePathFor(entry),
-        latitude: lat,
-        longitude: lon,
+        latitude: coordinates.latitude,
+        longitude: coordinates.longitude,
         content: content,
         frequency: meta?.meta['frequency'],
         protocol: meta?.protocol,
@@ -243,31 +276,43 @@ class MapToolController extends ChangeNotifier with WidgetsBindingObserver {
   }) async {
     try {
       final file = io.File(localPath);
-      if (!await file.exists()) return false;
-      final original = await file.readAsString();
-      final updated = _patchCoordinates(original, latitude, longitude);
-      await file.writeAsString(updated, flush: true);
-      if (remotePath != null && remotePath.isNotEmpty && _client.isConnected) {
-        try {
-          // The copy on the device belongs to the Flipper the file was opened
-          // from, so the write goes back to that one.
-          await _client.runTask(
-            FlipperRequestPriority.background,
-            () => _client.storageWriteChunked(remotePath, utf8.encode(updated)),
-          );
-        } catch (e) {
-          // The copy on the phone has the new coordinates and the save
-          // reports success, so the pin moves on screen and stays moved. The
-          // Flipper still holds the old ones, and nothing says the two have
-          // come apart.
-          LogService.warn('[Map] saved "$remotePath" locally only: $e');
+      if (await file.exists()) {
+        final updated = _patchCoordinates(
+          await file.readAsString(),
+          latitude,
+          longitude,
+        );
+        await file.writeAsString(updated, flush: true);
+        if (remotePath != null &&
+            remotePath.isNotEmpty &&
+            _client.isConnected) {
+          try {
+            await _client.storageWriteChunked(remotePath, utf8.encode(updated));
+          } catch (_) {}
         }
+        await refresh();
+        return true;
       }
-      await loadFiles();
+
+      if (remotePath == null || remotePath.isEmpty || !_client.isConnected) {
+        return false;
+      }
+      final original = utf8.decode(
+        await _client.storageReadChunked(remotePath),
+        allowMalformed: true,
+      );
+      final updated = _patchCoordinates(original, latitude, longitude);
+      await _client.storageWriteChunked(remotePath, utf8.encode(updated));
+      await refresh();
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  Future<void> refresh() async {
+    await _loadInFlight;
+    await loadFiles();
   }
 
   static String _patchCoordinates(
@@ -532,12 +577,5 @@ class MapToolController extends ChangeNotifier with WidgetsBindingObserver {
     _deviceInfoSub?.cancel();
     _deviceLocSub?.cancel();
     super.dispose();
-  }
-}
-
-extension ArchiveCategoryRemoteX on ArchiveCategory {
-  String remotePathFor({required String subFolder, required String fileName}) {
-    if (subFolder.isEmpty) return '$remoteDir/$fileName';
-    return '$remoteDir/$subFolder/$fileName';
   }
 }

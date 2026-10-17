@@ -8,9 +8,9 @@ import '../../services/localization/l10n.dart';
 import '../../theme/theme.dart';
 import 'pages/apps.dart';
 import 'pages/device.dart';
-import 'pages/diagnostics.dart';
 import 'pages/flibler.dart';
 import 'pages/language.dart';
+import 'pages/logs.dart';
 import 'pages/map.dart';
 import 'pages/push.dart';
 import 'pages/storage.dart';
@@ -93,9 +93,7 @@ class SettingsPage extends StatelessWidget {
     if (page == null) {
       return () => openRoute(context, category.route!);
     }
-    // Same shape as the tools card list, and guarded for the same reason: a
-    // second tap stacks an identical settings page. #244.
-    return () => pushPage(context, page);
+    return () => Navigator.of(context).push(MaterialPageRoute(builder: page));
   }
 
   @override
@@ -192,11 +190,11 @@ class SettingsPage extends StatelessWidget {
                 page: (_) => const AssemblerSettingsPage(),
               ),
               _Category(
-                title: context.l10n.settingsDiagnosticsTitle,
-                subtitle: context.l10n.settingsDiagnosticsSubtitle,
+                title: context.l10n.settingsLogTitle,
+                subtitle: context.l10n.settingsLogSubtitle,
                 asset: 'assets/ic/app/logs.svg',
                 color: const Color(0xFF90A4AE),
-                page: (_) => const DiagnosticsSettingsPage(),
+                page: (_) => const LogSettingsPage(),
               ),
             ],
             onTap: (c) => _open(context, c),

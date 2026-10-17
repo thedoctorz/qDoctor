@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/archive/overview/controller.dart';
+import 'package:doctormobile/pages/archive/overview/controller.dart';
 
 void main() {
   group('SyncProgress.ratio', () {

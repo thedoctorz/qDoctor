@@ -3,9 +3,6 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    // START: FlutterFire Configuration
-    id("com.google.gms.google-services")
-    // END: FlutterFire Configuration
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -26,13 +23,13 @@ val hasReleaseSigningConfig = listOf(
 ).all { !keystoreProperty(it).isNullOrBlank() }
 
 android {
-    namespace = "com.darkflippers.qunleashed"
+    namespace = "com.doctormobile.app"
     compileSdk = flutter.compileSdkVersion
 
     ndkVersion = flutter.ndkVersion
 
     defaultConfig {
-        applicationId = "com.darkflippers.qunleashed"
+        applicationId = "com.doctormobile.app"
 
         minSdk = 29
         targetSdk = flutter.targetSdkVersion
@@ -58,7 +55,7 @@ android {
 
     externalNativeBuild {
         cmake {
-            // Top-level CMake builds both qunleashed_mfkey32 and qunleashed_hardnested.
+            // Top-level CMake builds qunleashed_mfkey32, qunleashed_hardnested and doctor_subghz.
             path = file("../../lib/modules/cpp/CMakeLists.txt")
         }
     }
@@ -97,4 +94,8 @@ kotlin {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }

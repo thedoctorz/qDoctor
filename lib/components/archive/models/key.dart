@@ -1,4 +1,3 @@
-import '../../path.dart';
 import '../category.dart';
 
 enum ArchiveKeyState { local, synced, deleted }
@@ -18,9 +17,10 @@ class ArchiveKey {
     this.extra,
     this.mtime,
     this.meta,
-    this._flipperDir,
+    String? flipperDir,
     String? remotePath,
   }) : extension = extension ?? category.extension,
+       _flipperDir = flipperDir,
        _remotePathOverride = remotePath;
 
   final String name;
@@ -51,15 +51,6 @@ class ArchiveKey {
   static const Object _unset = Object();
 
   String get fileName => '$name.$extension';
-
-  /// How many bytes [name] may run to, given what [fileName] adds to it.
-  ///
-  /// Here because this is where the extension is appended: a prompt that
-  /// worked the budget out for itself would be reverse-engineering this
-  /// getter, and the arithmetic would go quietly wrong the day it appends
-  /// anything else. A name approved at the volume's own 255 reaches
-  /// `storageRename` four bytes over it, refused with no cause named - #277.
-  int get nameBudget => deviceNameBudgetFor(extension);
 
   String get remotePath {
     final override = _remotePathOverride;

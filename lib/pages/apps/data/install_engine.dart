@@ -1,4 +1,3 @@
-import '../../../services/guarded.dart';
 import '../../../services/localization/l10n.dart';
 
 import 'dart:async';
@@ -21,7 +20,6 @@ import 'models/category.dart';
 import 'models/detail.dart';
 import 'models/manifest.dart';
 import '../../../services/logging.dart';
-import '../../../services/telemetry/traced.dart';
 
 enum AppActionType { install, update, delete }
 
@@ -79,6 +77,14 @@ class InstallEngine extends ChangeNotifier {
   final Map<String, AppAction> _actions = {};
   Map<String, AppAction> get actions => Map.unmodifiable(_actions);
 
+  final Map<String, String> _failures = {};
+
+  String? consumeFailure(String alias) {
+    final message = _failures.remove(alias);
+    if (message == null || message.isEmpty) return null;
+    return message;
+  }
+
   AppAction? actionFor(AppCard app) =>
       app.alias.isEmpty ? null : _actions[app.alias];
 
@@ -102,7 +108,7 @@ class InstallEngine extends ChangeNotifier {
   }) {
     final task = _AppTask(alias, run, needsLink: needsLink);
     _taskQueue.add(task);
-    unawaited(guarded('[InstallEngine] drain task queue', _drainTaskQueue));
+    unawaited(_drainTaskQueue());
     return task.done.future;
   }
 
@@ -124,16 +130,7 @@ class InstallEngine extends ChangeNotifier {
         var ok = false;
         var requeued = false;
         try {
-          // Every queued task is device work, and this is where it starts, so
-          // this is where it binds: the frames it sends, the pings that pace
-          // them and the cleanup that follows a cancelled one all keep going to
-          // the Flipper it began against, however many the user swaps in
-          // meanwhile. What it may then write into the registries is a separate
-          // question, and the scope token answers that one.
-          ok = await client.runTask(
-            FlipperRequestPriority.background,
-            task.run,
-          );
+          ok = await task.run();
         } on _LinkDroppedException {
           task.attempts += 1;
           task.needsLink = true;
@@ -145,20 +142,18 @@ class InstallEngine extends ChangeNotifier {
             _taskQueue.insert(0, task);
           } else {
             _preparedInstalls.remove(task.alias);
+            if (!_cancelling.contains(task.alias) &&
+                _actions.containsKey(task.alias)) {
+              LogService.warn(
+                '[InstallEngine] task "${task.alias}" abandoned after '
+                '${task.attempts} link drops',
+              );
+              _failures[task.alias] = l10n.appsErrorLinkLost;
+            }
             if (_clearAction(task.alias)) notifyListeners();
           }
         } on FlipperWriteCancelledException {
           _preparedInstalls.remove(task.alias);
-          if (_clearAction(task.alias)) notifyListeners();
-        } on _DeviceChangedException {
-          // Not a failure: the task reached the device it was for, and the
-          // registries describe a different one now. handleReset has already
-          // emptied the queue and the action map; this only keeps the task from
-          // reporting itself into a Flipper that never asked for it.
-          _preparedInstalls.remove(task.alias);
-          // LogService.info(
-          //   '[InstallEngine] task "${task.alias}" dropped: device changed',
-          // );
           if (_clearAction(task.alias)) notifyListeners();
         } catch (e) {
           // Install and uninstall each catch their own and end at
@@ -210,31 +205,6 @@ class InstallEngine extends ChangeNotifier {
     if (_cancelling.contains(alias)) throw const _CancelledException();
   }
 
-  /// The device-switch counterpart of [_throwIfCancelled].
-  ///
-  /// A running task cannot be torn out from under the device any more than a
-  /// cancelled one can, so it unwinds at its next checkpoint instead. The
-  /// checkpoints sit before the device writes and before the registry writes:
-  /// what has already reached the previous Flipper is correct there, and what
-  /// has not must not be aimed at the one attached now.
-  void _throwIfStale(DeviceToken token) {
-    if (token.isStale) throw const _DeviceChangedException();
-  }
-
-  /// Timed as one operation — ADR 0013 §2 names app install.
-  ///
-  /// Timed from **outside** `_enqueueTask`, so the span covers the wait in the
-  /// queue as well as the install. Installing three apps at once is exactly
-  /// the case where the two differ, and the user is waiting for both.
-  ///
-  /// `traced` goes after the two early returns: neither is an install, and
-  /// recording them would put nil-duration operations around every real one.
-  ///
-  /// The alias is **not** attached. It names a third-party app the user chose
-  /// to install, which is a fact about them rather than about the app, and no
-  /// pattern in `Scrub` recognises one. `update` against `install` is the
-  /// distinction worth having, because an update also has to remove what was
-  /// there.
   Future<bool> installOrUpdate(
     AppCard app, {
     AppCategory? category,
@@ -242,6 +212,7 @@ class InstallEngine extends ChangeNotifier {
   }) {
     if (!isReady || app.alias.isEmpty) return Future.value(false);
     if (_actions.containsKey(app.alias)) return Future.value(false);
+    _failures.remove(app.alias);
 
     final wasInstalled = isInstalled(app);
     _actions[app.alias] = AppAction(
@@ -250,17 +221,10 @@ class InstallEngine extends ChangeNotifier {
       stage: AppActionStage.queued,
     );
     notifyListeners();
-    return traced('app.install', (trace) async {
-      trace.note('update', wasInstalled);
-      final ok = await _enqueueTask(
-        app.alias,
-        () => _performInstall(app, category: category, detail: detail),
-      );
-      // `_performInstall` reports a failure by answering false, so without
-      // this every refused install would arrive as a successful operation.
-      if (!ok) trace.failed();
-      return ok;
-    });
+    return _enqueueTask(
+      app.alias,
+      () => _performInstall(app, category: category, detail: detail),
+    );
   }
 
   Future<bool> _performInstall(
@@ -269,7 +233,6 @@ class InstallEngine extends ChangeNotifier {
     AppDetail? detail,
   }) async {
     if (!_actions.containsKey(app.alias)) return false;
-    final token = client.deviceToken;
 
     try {
       var prepared = _preparedInstalls[app.alias];
@@ -338,12 +301,7 @@ class InstallEngine extends ChangeNotifier {
         _throwIfCancelled(app.alias);
         _setActionState(app.alias, stage: AppActionStage.download, progress: 1);
 
-        unawaited(
-          guarded(
-            '[InstallEngine] cache icon',
-            () => _cacheFapIcon(app.alias, fapBytes),
-          ),
-        );
+        unawaited(_cacheFapIcon(app.alias, fapBytes));
 
         prepared = _PreparedInstall(
           manifest: manifest,
@@ -365,9 +323,8 @@ class InstallEngine extends ChangeNotifier {
           ? fapPath.substring(0, lastSlash)
           : kAppsRoot;
 
-      await _ensureDir(kAppsRoot);
-      await _ensureDir(installDir);
-      await _ensureDir(kManifestsRoot);
+      await _ensureDirTree(installDir);
+      await _ensureDirTree(kManifestsRoot);
 
       await client.storageWriteChunked(
         fapPath,
@@ -389,7 +346,6 @@ class InstallEngine extends ChangeNotifier {
           prepared.previousPath != fapPath) {
         await _safeDelete(prepared.previousPath);
       }
-      _throwIfStale(token);
       manifests.put(app.alias, manifest);
       await onInstalled(
         alias: app.alias,
@@ -401,7 +357,6 @@ class InstallEngine extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      if (e is _DeviceChangedException) rethrow;
       if (_cancelling.contains(app.alias)) {
         _preparedInstalls.remove(app.alias);
         // Not a failure: the user asked for this.
@@ -411,6 +366,7 @@ class InstallEngine extends ChangeNotifier {
         return false;
       }
       if (e is _LinkDroppedException || !isReady) {
+        LogService.warn('[InstallEngine] install ${app.alias} lost link: $e');
         _setActionState(app.alias, stage: AppActionStage.queued, progress: 0);
         throw const _LinkDroppedException();
       }
@@ -419,12 +375,18 @@ class InstallEngine extends ChangeNotifier {
     }
   }
 
+  String _describeFailure(Object error) {
+    if (error is StateError && error.message.isNotEmpty) return error.message;
+    return error.toString();
+  }
+
   Future<bool> _failAction(String alias, Object error, String what) async {
     // The fan-in for an install or uninstall that failed with the link up.
     // Link drops are rethrown past this to be requeued, and restore has no
     // catch of its own and fails through the queue worker instead. The cause
     // stops here.
     LogService.warn('[InstallEngine] $what $alias failed: $error');
+    _failures[alias] = _describeFailure(error);
     await Future<void>.delayed(const Duration(seconds: 2));
     _clearAction(alias);
     notifyListeners();
@@ -471,20 +433,16 @@ class InstallEngine extends ChangeNotifier {
   ) async {
     if (!_actions.containsKey(alias)) return false;
     if (!isReady) throw const _LinkDroppedException();
-    final token = client.deviceToken;
     _setActionState(alias, stage: AppActionStage.download);
     try {
       final fapPath = await resolveFapPath();
-      _throwIfStale(token);
       await _safeDelete('$kManifestsRoot/$alias.fim');
       await _safeDelete(fapPath);
-      _throwIfStale(token);
       manifests.removeAlias(alias);
       _clearAction(alias);
       notifyListeners();
       return true;
     } catch (e) {
-      if (e is _DeviceChangedException) rethrow;
       if (!isReady) {
         _setActionState(alias, stage: AppActionStage.queued, progress: 0);
         throw const _LinkDroppedException();
@@ -523,11 +481,9 @@ class InstallEngine extends ChangeNotifier {
     );
     notifyListeners();
     return _enqueueTask(alias, () async {
-      final token = client.deviceToken;
       final lastSlash = fapPath.lastIndexOf('/');
       final dir = lastSlash > 0 ? fapPath.substring(0, lastSlash) : kAppsRoot;
-      await _ensureDir(kAppsRoot);
-      await _ensureDir(dir);
+      await _ensureDirTree(dir);
       await client.storageWriteChunked(
         fapPath,
         fapBytes,
@@ -538,11 +494,10 @@ class InstallEngine extends ChangeNotifier {
       _setActionState(alias, stage: AppActionStage.check, progress: 1);
       await _verifyUpload(fapPath, fapBytes);
       if (manifest != null) {
-        await _ensureDir(kManifestsRoot);
+        await _ensureDirTree(kManifestsRoot);
         final bytes = utf8.encode(manifest.encode());
         await client.storageWriteChunked('$kManifestsRoot/$alias.fim', bytes);
         await _verifyUpload('$kManifestsRoot/$alias.fim', bytes);
-        _throwIfStale(token);
         manifests.put(alias, manifest);
       }
       _clearAction(alias);
@@ -603,22 +558,34 @@ class InstallEngine extends ChangeNotifier {
     LogService.info('[InstallEngine] md5 of "$path" verified');
   }
 
-  Future<void> _ensureDir(String path) async {
+  Future<void> _ensureDirTree(String path) async {
+    final segments = path.split('/').where((s) => s.isNotEmpty).toList();
+    for (var i = 2; i <= segments.length; i++) {
+      final dir = '/${segments.take(i).join('/')}';
+      try {
+        await client.storageMkdir(MkdirRequest(path: dir));
+      } on FlipperRpcStorageExistException {
+        continue;
+      } catch (e) {
+        LogService.warn('[InstallEngine] mkdir "$dir" failed: $e');
+      }
+    }
+    final FlipperRpcBatch<StatResponse> stat;
     try {
-      await client.storageMkdir(MkdirRequest(path: path));
-    } catch (_) {}
+      stat = await client.storageStat(StatRequest(path: path));
+    } catch (e) {
+      throw StateError('Cannot create folder "$path" on the Flipper: $e');
+    }
+    final file = stat.items.isNotEmpty ? stat.items.first.file : null;
+    if (file != null && file.type != File_FileType.DIR) {
+      throw StateError('"$path" on the Flipper is a file, not a folder');
+    }
   }
 
   Future<void> _safeDelete(String path) async {
     try {
       await client.storageDelete(DeleteRequest(path: path, recursive: false));
-    } catch (e) {
-      // Best-effort on purpose: the caller carries on and reports success
-      // either way, because the file may already be gone and stopping here
-      // would leave an app half-installed or half-removed. What is left is a
-      // file on the SD card the app believes it has deleted.
-      LogService.warn('[InstallEngine] could not remove "$path": $e');
-    }
+    } catch (_) {}
   }
 
   Future<String> _resolveInstallDir(
@@ -687,11 +654,15 @@ class InstallEngine extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    for (final alias in _actions.keys) {
+      if (_cancelling.contains(alias)) continue;
+      _failures[alias] = l10n.appsErrorLinkLost;
+    }
     handleReset();
   }
 
   void handleConnect() {
-    unawaited(guarded('[InstallEngine] drain task queue', _drainTaskQueue));
+    unawaited(_drainTaskQueue());
     notifyListeners();
   }
 
@@ -724,11 +695,6 @@ class _PreparedInstall {
 
 class _LinkDroppedException implements Exception {
   const _LinkDroppedException();
-}
-
-/// Raised at a checkpoint when the Flipper in scope changed under a task.
-class _DeviceChangedException implements Exception {
-  const _DeviceChangedException();
 }
 
 class _CancelledException implements Exception {

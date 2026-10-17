@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:archive/archive_io.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
-import 'package:qunleashed/pages/tools/infrared/local_repo.dart';
+import 'package:doctormobile/pages/tools/infrared/local_repo.dart';
 
 final String sep = Platform.pathSeparator;
 

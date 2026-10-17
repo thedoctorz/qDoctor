@@ -1,5 +1,4 @@
 import '../../../../services/localization/l10n.dart';
-import '../../../../services/logging.dart';
 
 import 'dart:async';
 
@@ -9,14 +8,14 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../../../theme/theme.dart';
 
-import 'package:qunleashed/components/appbar.dart';
-import 'package:qunleashed/components/icon.dart';
-import 'package:qunleashed/theme/colors/category.dart';
+import 'package:doctormobile/components/appbar.dart';
+import 'package:doctormobile/components/icon.dart';
+import 'package:doctormobile/theme/colors/category.dart';
 
 import '../../../../components/notification.dart';
 import '../../../../components/progress_button.dart';
 
-import 'package:qunleashed/services/progress_throttle.dart';
+import 'package:doctormobile/services/progress_throttle.dart';
 
 typedef IrFileSendHandler = Future<bool> Function({
   required List<int> bytes,
@@ -30,7 +29,6 @@ const _infraredAsset = 'assets/ic/fileformat/ir.svg';
 class IrFileViewer extends StatefulWidget {
   const IrFileViewer({
     super.key,
-    required this.client,
     required this.fileName,
     required this.subtitle,
     required this.loading,
@@ -40,15 +38,7 @@ class IrFileViewer extends StatefulWidget {
     required this.isConnected,
     required this.onSend,
     this.onAfterSend,
-    this.sendFailureReason,
   });
-
-  /// The device whose link this watches while the file is on screen.
-  ///
-  /// Required rather than defaulted: both builders already hold one - the
-  /// library page through its controller, the content page directly - so a
-  /// default would only make this untestable. ADR 0002.
-  final FlipperClient client;
 
   final String fileName;
   final String subtitle;
@@ -60,19 +50,12 @@ class IrFileViewer extends StatefulWidget {
   final IrFileSendHandler onSend;
   final IrFileAfterSend? onAfterSend;
 
-  /// Why the last send did not go, asked for only when one did not.
-  ///
-  /// A callback rather than a value because the viewer is built before the
-  /// send happens, and a parameter would carry the reason from the send
-  /// before it. Null where the builder has nobody to ask - the content page
-  /// sends through the client directly and keeps no such record.
-  final String? Function()? sendFailureReason;
-
   @override
   State<IrFileViewer> createState() => _IrFileViewerState();
 }
 
 class _IrFileViewerState extends State<IrFileViewer> {
+  final FlipperClient _client = FlipperOneClient().get();
   bool _sending = false;
   bool _connected = false;
   double _sendProgress = 0;
@@ -82,25 +65,15 @@ class _IrFileViewerState extends State<IrFileViewer> {
   @override
   void initState() {
     super.initState();
-    _connected = widget.isConnected && widget.client.isConnected;
-    _connectionSub = widget.client.connectionStream.listen(_onConnectionState);
+    _connected = widget.isConnected && _client.isConnected;
+    _connectionSub = _client.connectionStream.listen(_onConnectionState);
   }
 
   @override
   void didUpdateWidget(covariant IrFileViewer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // The client can change under this now that it is passed in, and the
-    // subscription belongs to the one it was opened on - a page that swapped
-    // devices would otherwise keep reading the link that left.
-    if (oldWidget.client != widget.client) {
-      _connectionSub?.cancel();
-      _connectionSub = widget.client.connectionStream.listen(
-        _onConnectionState,
-      );
-    }
-    if (oldWidget.isConnected != widget.isConnected ||
-        oldWidget.client != widget.client) {
-      _connected = widget.isConnected && widget.client.isConnected;
+    if (oldWidget.isConnected != widget.isConnected) {
+      _connected = widget.isConnected && _client.isConnected;
     }
   }
 
@@ -147,25 +120,11 @@ class _IrFileViewerState extends State<IrFileViewer> {
     if (!mounted) return;
     setState(() => _sending = false);
     if (ok && widget.onAfterSend != null) {
-      try {
-        await widget.onAfterSend!(bytes);
-      } catch (e) {
-        // Both callers swallow their own failures today, so this cannot fire
-        // - but whether the send result is reported at all should not rest on
-        // that staying true.
-        LogService.warn('[IrFileViewer] after-send hook threw: $e');
-      }
+      await widget.onAfterSend!(bytes);
     }
     if (!mounted) return;
-    // The failed half named no cause, and the disconnect that usually
-    // causes it arrives as the sentence sendIrFile raises. #114.
-    final reason = ok ? null : widget.sendFailureReason?.call();
     context.showNotification(
-      ok
-          ? context.l10n.irSentToDevice
-          : reason == null
-          ? context.l10n.irSendFailed
-          : context.l10n.fmFailedBecause(context.l10n.irSendFailed, reason),
+      ok ? context.l10n.irSentToDevice : context.l10n.irSendFailed,
       type: ok ? QNotificationType.good : QNotificationType.error,
     );
   }
@@ -176,7 +135,6 @@ class _IrFileViewerState extends State<IrFileViewer> {
     return Scaffold(
       backgroundColor: colors.background,
       appBar: QPageAppBar(
-        client: widget.client,
         title: widget.fileName,
         backgroundColor: colors.accent,
         foregroundColor: colors.onAccent,

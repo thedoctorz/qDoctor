@@ -23,8 +23,7 @@ import '../../../../components/archive/category.dart';
 import '../../../../components/archive/models/key.dart';
 import '../../../../services/home_widget/service.dart';
 import '../../widgets/actions_sheet.dart';
-import '../../../devices/device_scope.dart';
-import '../failure_toast.dart';
+import '../../../tools/subghz/decode_raw/decode_raw_sub.dart';
 
 /// Builds the archive-specific action set for an [ArchiveKey] and presents it
 /// through the shared [ActionsSheet], so the file manager and the category
@@ -123,12 +122,6 @@ class KeyActionsSheet {
               return;
             }
             await controller.restoreKey(k);
-            if (!context.mounted) return;
-            reportArchiveFailure(
-              context,
-              controller.lastFailure,
-              context.l10n.archiveRestoreFailed,
-            );
           },
         ),
       );
@@ -159,6 +152,17 @@ class KeyActionsSheet {
           icon: Icons.show_chart,
           label: context.l10n.archivePlotter,
           onTap: () => _openInPlotter(context, controller, k),
+        ),
+      );
+    }
+    if (!k.isDeleted &&
+        k.extension.toLowerCase() == 'sub' &&
+        DecodeRawSub.isArchiveRaw(k.protocol, k.meta)) {
+      actions.add(
+        ActionItem(
+          icon: Icons.auto_awesome,
+          label: context.l10n.archiveDecodeRaw,
+          onTap: () => _openInDecodeRaw(context, controller, k),
         ),
       );
     }
@@ -306,12 +310,8 @@ class KeyActionsSheet {
   /// Opens [k] on the connected Flipper. Public so the file manager can reuse
   /// the exact same emulation entry point for matching files.
   static void emulateOnFlipper(BuildContext context, ArchiveKey k) {
-    final client = DeviceScope.of(context).client;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => EmulatePage(flipperKey: k, client: client),
-      ),
-    );
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => EmulatePage(flipperKey: k)));
   }
 
   static Future<void> _pinToHomeScreen(
@@ -334,12 +334,6 @@ class KeyActionsSheet {
     ArchiveKey k,
   ) async {
     List<int>? bytes;
-    // Only the reason of a read that actually ran. The branch below is
-    // skipped for a key that is not on the device or with no link, and the
-    // controller's field would then still hold whatever the *previous*
-    // action failed with - a stale excuse on a fresh message is worse than
-    // no excuse at all. #110.
-    String? reason;
     final localPath = k.localPath;
     if (localPath != null && localPath.isNotEmpty) {
       final file = io.File(localPath);
@@ -347,16 +341,11 @@ class KeyActionsSheet {
     }
     if (bytes == null && k.onDevice && controller.isConnected) {
       bytes = await controller.readKeyBytes(k);
-      reason = controller.lastFailure;
     }
     if (!context.mounted) return;
     if (bytes == null) {
       context.showNotification(
-        withArchiveReason(
-          context,
-          context.l10n.archiveCouldNotRead(k.fileName),
-          reason,
-        ),
+        context.l10n.archiveCouldNotRead(k.fileName),
         type: QNotificationType.error,
       );
       return;
@@ -366,6 +355,54 @@ class KeyActionsSheet {
         context,
         AppRoute.plotter,
         args: PlotterArgs(bytes: Uint8List.fromList(bytes), name: k.fileName),
+      ),
+    );
+  }
+
+  static Future<void> _openInDecodeRaw(
+    BuildContext context,
+    ArchiveController controller,
+    ArchiveKey k,
+  ) async {
+    if (!controller.isConnected) {
+      context.showNotification(
+        context.l10n.decodeRawConnectFirst,
+        type: QNotificationType.warning,
+      );
+      return;
+    }
+    if (k.onDevice) {
+      unawaited(
+        openRoute(
+          context,
+          AppRoute.decodeRaw,
+          args: DecodeRawArgs(remotePath: k.remotePath, name: k.fileName),
+        ),
+      );
+      return;
+    }
+    List<int>? bytes;
+    final localPath = k.localPath;
+    if (localPath != null && localPath.isNotEmpty) {
+      final file = io.File(localPath);
+      if (await file.exists()) bytes = await file.readAsBytes();
+    }
+    if (!context.mounted) return;
+    if (bytes == null) {
+      context.showNotification(
+        context.l10n.archiveCouldNotRead(k.fileName),
+        type: QNotificationType.error,
+      );
+      return;
+    }
+    unawaited(
+      openRoute(
+        context,
+        AppRoute.decodeRaw,
+        args: DecodeRawArgs(
+          localBytes: Uint8List.fromList(bytes),
+          name: k.fileName,
+        ),
       ),
     );
   }
@@ -380,10 +417,7 @@ class KeyActionsSheet {
         openRoute(
           context,
           AppRoute.pixelEditor,
-          args: PixelEditorArgs(
-            remotePath: k.remotePath,
-            client: controller.client,
-          ),
+          args: PixelEditorArgs(remotePath: k.remotePath),
         ),
       );
       return;
@@ -394,7 +428,6 @@ class KeyActionsSheet {
         remotePath: k.remotePath,
         download: () => controller.downloadKeyToCache(k),
         upload: (bytes) => controller.writeKeyBytes(k, bytes),
-        failureReason: () => controller.lastFailure,
         onRun: k.extension.toLowerCase() == 'js'
             ? () => emulateOnFlipper(context, k)
             : null,
@@ -419,11 +452,7 @@ class KeyActionsSheet {
     if (!context.mounted) return;
     if (path == null) {
       context.showNotification(
-        withArchiveReason(
-          context,
-          context.l10n.fmDownloadFailed,
-          controller.lastFailure,
-        ),
+        context.l10n.fmDownloadFailed,
         type: QNotificationType.error,
       );
       return;
@@ -437,12 +466,6 @@ class KeyActionsSheet {
     ArchiveKey k,
   ) async {
     List<int>? bytes;
-    // Only the reason of a read that actually ran. The branch below is
-    // skipped for a key that is not on the device or with no link, and the
-    // controller's field would then still hold whatever the *previous*
-    // action failed with - a stale excuse on a fresh message is worse than
-    // no excuse at all. #110.
-    String? reason;
     final localPath = k.localPath;
     if (localPath != null && localPath.isNotEmpty) {
       final file = io.File(localPath);
@@ -450,12 +473,11 @@ class KeyActionsSheet {
     }
     if (bytes == null && k.onDevice && controller.isConnected) {
       bytes = await controller.readKeyBytes(k);
-      reason = controller.lastFailure;
     }
     if (!context.mounted) return;
     if (bytes == null) {
       context.showNotification(
-        withArchiveReason(context, context.l10n.fmDownloadFailed, reason),
+        context.l10n.fmDownloadFailed,
         type: QNotificationType.error,
       );
       return;
@@ -486,11 +508,9 @@ class KeyActionsSheet {
   }
 
   static void _openInFileManager(BuildContext context, ArchiveKey k) {
-    final client = DeviceScope.of(context).client;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) =>
-            FileManagerPage(client: client, initialPath: _parent(k.remotePath)),
+        builder: (_) => FileManagerPage(initialPath: _parent(k.remotePath)),
       ),
     );
   }
@@ -499,12 +519,7 @@ class KeyActionsSheet {
     final path = k.localPath;
     if (path == null || path.isEmpty) return;
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => FlipperMapPage(
-          client: DeviceScope.of(context).client,
-          focusPinPath: path,
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => FlipperMapPage(focusPinPath: path)),
     );
   }
 
@@ -514,7 +529,6 @@ class KeyActionsSheet {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FlipperMapPage(
-          client: DeviceScope.of(context).client,
           pickLocationFor: MapPickTarget(
             localPath: path,
             remotePath: k.remotePath,
@@ -577,13 +591,6 @@ class KeyActionsSheet {
     );
     if (ok == true) {
       await controller.deleteKeys(keys, local: local, remote: remote);
-      if (context.mounted) {
-        reportArchiveFailure(
-          context,
-          controller.lastFailure,
-          context.l10n.archiveDeleteFailed,
-        );
-      }
       onDone?.call();
     }
   }

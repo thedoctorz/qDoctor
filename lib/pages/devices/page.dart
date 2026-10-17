@@ -10,15 +10,11 @@ import 'widgets/page_card.dart';
 import 'device_scope.dart';
 import 'firmware/repository.dart';
 import 'models/connection_state.dart';
-import '../../services/connection/link_service.dart';
-import 'widgets/cards/auto_connect_hint.dart';
-import 'widgets/cards/battery_card.dart';
 import 'widgets/cards/connect_card.dart';
 import 'widgets/cards/device_actions_row.dart';
 import 'widgets/cards/device_info_card.dart';
-import 'widgets/cards/network_card.dart';
-import 'widgets/cards/storage_card.dart';
 import 'widgets/firmware_card.dart';
+import 'widgets/pinned_tool_cards.dart';
 import 'widgets/full_info_sheet.dart';
 import 'widgets/page_header.dart';
 
@@ -60,20 +56,16 @@ class DeviceTab extends StatelessWidget {
                       ),
                       child: Column(
                         children: [
-                          // Above everything, and in every state: the sharp
-                          // case is the app already holding two links and a
-                          // third Flipper being plugged in, where the page
-                          // otherwise looks entirely connected. #120.
-                          AutoConnectHintCard(links: LinkService.instance),
                           // Always in tree — preserves carousel state across
                           // connect/disconnect without rebuilding.
                           FirmwareCard(
                             deviceVersion: ctrl.firmwareVersion,
                             deviceInfo: ctrl.info,
                           ),
+                          const PinnedToolCards(),
                           AnimatedSwitcher(
                             duration: const Duration(milliseconds: 220),
-                            child: _stateContent(ctrl.connectionState, wide),
+                            child: _stateContent(ctrl.connectionState),
                           ),
                         ],
                       ),
@@ -97,6 +89,7 @@ class DeviceTab extends StatelessWidget {
           connectionIcon: ctrl.device?.isBle == true
               ? Icons.bluetooth
               : Icons.usb,
+          showStats: ctrl.isConnected,
           onOpenFullInfo: ctrl.isConnected
               ? () => _openFullInfo(context)
               : null,
@@ -105,10 +98,10 @@ class DeviceTab extends StatelessWidget {
     );
   }
 
-  static Widget _stateContent(DeviceConnectionState state, bool wide) {
+  static Widget _stateContent(DeviceConnectionState state) {
     switch (state) {
       case DeviceConnectionState.connected:
-        return _ConnectedContent(key: const ValueKey('connected'), wide: wide);
+        return const _ConnectedContent(key: ValueKey('connected'));
       case DeviceConnectionState.dfu:
       case DeviceConnectionState.recovering:
         return const SizedBox.shrink(key: ValueKey('recovery'));
@@ -153,9 +146,7 @@ class DeviceTab extends StatelessWidget {
 // ── Connected content ─────────────────────────────────────────────────────────
 
 class _ConnectedContent extends StatelessWidget {
-  const _ConnectedContent({super.key, required this.wide});
-
-  final bool wide;
+  const _ConnectedContent({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -166,29 +157,12 @@ class _ConnectedContent extends StatelessWidget {
         const SizedBox(height: 14),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: _ResponsiveCardGrid(
-            children: [
-              BatterySummaryCard(deviceInfo: ctrl.info),
-              StorageSummaryCard(deviceInfo: ctrl.info),
-            ],
+          child: DeviceInfoCard(
+            entries: ctrl.deviceInfoEntries,
+            onOpenFullInfo: () => DeviceTab._openFullInfo(context),
+            onExport: () => _exportDeviceInfo(context),
           ),
         ),
-        const SizedBox(height: 14),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 14),
-          child: NetworkSummaryCard(),
-        ),
-        if (!wide) ...[
-          const SizedBox(height: 14),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: DeviceInfoCard(
-              entries: ctrl.deviceInfoEntries,
-              onOpenFullInfo: () => DeviceTab._openFullInfo(context),
-              onExport: () => _exportDeviceInfo(context),
-            ),
-          ),
-        ],
         const SizedBox(height: 14),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -234,45 +208,5 @@ class _DisconnectedContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Column(children: [SizedBox(height: 14), ConnectCard()]);
-  }
-}
-
-class _ResponsiveCardGrid extends StatelessWidget {
-  const _ResponsiveCardGrid({required this.children});
-
-  final List<Widget> children;
-  static const double _spacing = 14;
-  static const double _minCardWidth = 300;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final columns = (constraints.maxWidth / _minCardWidth).floor().clamp(
-          1,
-          children.length,
-        );
-        final cardWidth =
-            (constraints.maxWidth - (_spacing * (columns - 1))) / columns;
-        if (columns == 1) {
-          return Column(
-            children: [
-              for (var i = 0; i < children.length; i++) ...[
-                SizedBox(width: double.infinity, child: children[i]),
-                if (i != children.length - 1) const SizedBox(height: _spacing),
-              ],
-            ],
-          );
-        }
-        return Wrap(
-          spacing: _spacing,
-          runSpacing: _spacing,
-          children: [
-            for (final child in children)
-              SizedBox(width: cardWidth, child: child),
-          ],
-        );
-      },
-    );
   }
 }

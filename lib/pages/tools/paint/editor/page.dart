@@ -9,9 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flipperlib/flipperlib.dart' hide DateTime;
 import 'package:flutter/material.dart';
 
-import '../../../../components/format.dart';
 import '../../../../components/path.dart';
-import '../../../../components/picked_file.dart';
 import '../../../../services/logging.dart';
 import '../../../../services/storage/paths.dart';
 import '../../../../theme/theme.dart';
@@ -28,37 +26,9 @@ import 'widgets/editor_toolbars.dart';
 import 'widgets/editor_widgets.dart';
 import 'widgets/frames_strip.dart';
 
-/// The largest single image this page will read from a pick.
-///
-/// Everything it decodes draws onto the Flipper's 128x64 screen: a `.bm`
-/// frame is about a kilobyte, a PNG of that screen a few, and the largest
-/// honest input is a multi-frame GIF. 8 MB is well past all of them and well
-/// under what decoding one costs, which is the number that matters -
-/// `instantiateImageCodec` holds the encoded bytes and the raw RGBA at once.
-const int _paintImportLimit = 8 * 1024 * 1024;
-
-/// The largest `meta.txt` this page will read.
-///
-/// A dolphin manifest is a few lines of text. This is not a cap on the import
-/// - the frames around it are bounded separately, where they are read - it is
-/// a cap on reading a file that is only called `meta.txt`.
-const int _metaTextLimit = 1024 * 1024;
-
-/// The most frames a dolphin manifest may ask for.
-///
-/// The count derived from `Passive frames` and `Active frames` is already
-/// clamped to this; the `Frames order` line was not, so a manifest naming
-/// frame 999999999 sent the walk below `stat`-ing its way there one file at a
-/// time. Restated here so both ways in land on the same bound.
-const int _maxDolphinFrameIdx = 255;
-
 class PaintPage extends StatefulWidget {
   const PaintPage({super.key, this.project, this.remotePath, this.client})
-    : assert(project == null || remotePath == null),
-      // A drawing on the Flipper cannot be read without one, and the two
-      // routes that open one both have a scope to take it from. A local
-      // project needs no device at all. ADR 0002.
-      assert(remotePath == null || client != null);
+    : assert(project == null || remotePath == null);
 
   /// Project to load into the canvas when the editor opens. When null the editor
   /// starts a fresh, blank project (which becomes a draft once edited).
@@ -142,37 +112,26 @@ class _PaintPageState extends State<PaintPage> {
     }
   }
 
-  /// What decodes [ext], or null if nothing here does.
-  ///
-  /// One list rather than three. Both ways into the decoders - a pick and a
-  /// file opened from the device - ask this, so a format added here reaches
-  /// both, and one added to neither cannot be half-supported.
-  Future<void> Function(Uint8List bytes)? _decoderFor(String ext) =>
-      switch (ext) {
-        'bm' => _importBmSingle,
-        'gif' => _importGif,
-        'png' => _importPng,
-        _ => null,
-      };
-
   Future<void> _loadRemoteFile(String path) async {
     try {
-      final bytes = await widget.client!.storageReadChunked(
-        path,
-        timeout: const Duration(minutes: 5),
-      );
+      final bytes = await (widget.client ?? FlipperOneClient().get())
+          .storageReadChunked(path, timeout: const Duration(minutes: 5));
       if (bytes.isEmpty) {
         throw StateError(l10n.paintFileEmpty);
       }
 
       final data = Uint8List.fromList(bytes);
-      final decode = _decoderFor(_extensionOf(path));
-      if (decode == null) {
-        // The global `l10n` and not `context.l10n`, matching `paintFileEmpty`
-        // above: both are read after an await, and neither needs the tree.
-        throw UnsupportedError(l10n.paintUnsupportedFile);
+      final extension = _extensionOf(path);
+      switch (extension) {
+        case 'png':
+          await _importPng(data);
+        case 'gif':
+          await _importGif(data);
+        case 'bm':
+          await _importBmSingle(data);
+        default:
+          throw UnsupportedError(context.l10n.paintUnsupportedFile);
       }
-      await decode(data);
     } catch (e) {
       if (!mounted) return;
       context.showNotification(
@@ -206,12 +165,7 @@ class _PaintPageState extends State<PaintPage> {
         compress: _ctrl.compressBm,
       );
     } catch (e) {
-      // The draft is how work survives leaving the editor, so this is the
-      // difference between losing the drawing and not. A 1.2s trailing
-      // debounce fires it once per pause, and a persistent cause keeps $e
-      // stable, so back-to-back failures fold into one counted entry -
-      // unless another kept line lands between them.
-      LogService.warn('[PaintEditor] autosave draft failed: $e');
+      LogService.info('[PaintEditor] autosave draft failed: $e');
     } finally {
       _savingDraft = false;
     }
@@ -393,12 +347,7 @@ class _PaintPageState extends State<PaintPage> {
       try {
         final old = io.Directory(prevTarget);
         if (await old.exists()) await old.delete(recursive: true);
-      } catch (e) {
-        // The project is saved under its new name either way. What is left is
-        // the draft it was saved from, which the library then lists beside it
-        // as a second, older copy of the same drawing.
-        LogService.warn('[Paint] left the draft "$prevTarget" behind: $e');
-      }
+      } catch (_) {}
     }
   }
 
@@ -533,63 +482,52 @@ class _PaintPageState extends State<PaintPage> {
 
   Future<void> _onImport() async {
     try {
-      // `withData: false` (the default); the bytes are read in Dart. See
-      // `readPickedFile` for why. Sentry QUNLEASHED-E.
-      final result = await FilePicker.platform.pickFiles(type: FileType.any);
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        withData: true,
+      );
       if (result == null || result.files.isEmpty) return;
 
       final file = result.files.first;
+      final name = file.name.toLowerCase();
+      final ext = file.extension?.toLowerCase() ?? '';
+      final bytes = file.bytes;
       final path = file.path;
-      // Checked once, for every branch below. Every target this app ships
-      // supplies a path.
-      if (path == null) {
-        if (!mounted) return;
-        context.showNotification(
-          context.l10n.paintNoFilePath,
-          type: QNotificationType.error,
-        );
+
+      if (name == 'meta.txt') {
+        if (path != null) {
+          await _importDolphinFromPath(path);
+        } else {
+          if (!mounted) return;
+          context.showNotification(
+            context.l10n.paintNoFilePath,
+            type: QNotificationType.error,
+          );
+        }
         return;
       }
 
-      if (file.name.toLowerCase() == 'meta.txt') {
-        // Only the manifest is measured here. What bounds the import is the
-        // frame walk itself, in `_importDolphinFromPath`, because that is
-        // where the bytes are - a two-line `meta.txt` can name 256 frames.
-        await ensurePickedFileFits(path, limit: _metaTextLimit);
-        await _importDolphinFromPath(path);
+      if (ext == 'bm') {
+        final data =
+            bytes ?? (path != null ? await io.File(path).readAsBytes() : null);
+        if (data != null) await _importBmSingle(data);
         return;
       }
 
-      // Decided on the extension before anything is read: there is nothing to
-      // gain from pulling a picked video into memory to then turn it down.
-      final decode = _decoderFor(file.extension?.toLowerCase() ?? '');
-      if (decode == null) {
+      if (bytes == null) return;
+
+      if (ext == 'gif') {
+        await _importGif(bytes);
+      } else if (ext == 'png') {
+        await _importPng(bytes);
+      } else {
         if (!mounted) return;
         context.showNotification(
           context.l10n.paintUnsupportedType,
           type: QNotificationType.error,
         );
-        return;
       }
-
-      await decode(await readPickedFile(path, limit: _paintImportLimit));
-    } on PickedFileTooLarge catch (e) {
-      if (!mounted) return;
-      context.showNotification(
-        context.l10n.commonFileTooLarge(
-          formatBytes(e.size),
-          formatBytes(e.limit),
-        ),
-        type: QNotificationType.error,
-      );
-    } catch (e, st) {
-      // The toast carries `$e`, which is the user's only feedback and is not
-      // a sentence - and before this it was also the only record anywhere, so
-      // a failed import reached nobody who could act on it. Reading the file
-      // is now this method's own I/O, so there is more that can land here.
-      LogService.caught(
-        '[Paint] importing the picked file failed: ${LogService.describe(e, st)}',
-      );
+    } catch (e) {
       if (!mounted) return;
       context.showNotification(
         context.l10n.paintImportFailed('$e'),
@@ -674,28 +612,12 @@ class _PaintPageState extends State<PaintPage> {
       ).firstMatch(metaText);
       final orderStr = orderMatch?.group(1)?.trim() ?? '';
 
-      int maxFrameIdx = (passiveFrames + activeFrames - 1).clamp(
-        0,
-        _maxDolphinFrameIdx,
-      );
+      int maxFrameIdx = (passiveFrames + activeFrames - 1).clamp(0, 255);
       if (orderStr.isNotEmpty) {
         for (final s in orderStr.split(RegExp(r'\s+'))) {
           final n = int.tryParse(s);
           if (n != null && n > maxFrameIdx) maxFrameIdx = n;
         }
-      }
-      // The clamp above was on the counted frames only, so a `Frames order`
-      // naming frame 999999999 walked to it one `exists()` at a time - with
-      // no frame files present the loop below neither finds nor breaks, and
-      // the import hangs on a file the user picked. Same bound, both ways in.
-      maxFrameIdx = maxFrameIdx.clamp(0, _maxDolphinFrameIdx);
-
-      // What the walk will hold if every frame is there. The frames are the
-      // import's real size - this is the cap `_onImport` could not apply to
-      // the manifest, applied where the bytes are.
-      final projected = expectedBytes * (maxFrameIdx + 1);
-      if (projected > _paintImportLimit) {
-        throw PickedFileTooLarge(projected, _paintImportLimit);
       }
 
       final newFrames = <Uint8List>[];

@@ -4,8 +4,8 @@ import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/components/archive_unpack.dart';
-import 'package:qunleashed/pages/apps/data/atp/atp_source.dart';
+import 'package:doctormobile/components/archive_unpack.dart';
+import 'package:doctormobile/pages/apps/data/atp/atp_source.dart';
 
 /// A pack zip wraps its apps in a per-build folder whose name starts with
 /// `artifacts-`; everything up to and including it is stripped.

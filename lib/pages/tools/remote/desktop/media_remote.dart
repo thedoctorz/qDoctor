@@ -83,12 +83,13 @@ const Duration wristRemoteDoubleTapDuration = Duration(milliseconds: 400);
 class MediaRemoteBridge {
   MediaRemoteBridge({
     required this.onButton,
-    this._supportedOverride,
+    bool? supportedOverride,
     @visibleForTesting Future<SharedPreferences> Function()? preferencesLoader,
-  }) : _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
+  }) : _supportedOverride = supportedOverride,
+       _preferencesLoader = preferencesLoader ?? SharedPreferences.getInstance;
 
   static const MethodChannel _channel = MethodChannel(
-    'qunleashed/media_remote',
+    'doctormobile/media_remote',
   );
 
   // The native MediaSession belongs to the cached FlutterEngine, not to one

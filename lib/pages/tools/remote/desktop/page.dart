@@ -1,22 +1,23 @@
 import 'dart:async';
 
-import 'package:flipperlib/flipperlib.dart' show FlipperClient;
+import 'package:flipperlib/flipperlib.dart' show FlipperClient, InputFocusKind;
 import 'package:flutter/material.dart';
-import 'package:qunleashed/components/appbar.dart';
+import 'package:doctormobile/components/appbar.dart';
 
-import '../../../../services/guarded.dart';
-import '../../../../components/dialogs/connection.dart';
 import '../../../../components/notification.dart';
 import '../../../../services/localization/l10n.dart';
 import '../../../../services/logging.dart';
 import '../../../../theme/theme.dart';
 import 'gif_export_dialog.dart';
 import 'gif_recorder.dart';
+import 'input/keyboard_board.dart';
 import 'input/keyboard_listener.dart';
+import 'input/phone_field.dart';
 import 'layout.dart';
 import 'media_remote.dart';
 import 'media_remote_settings.dart';
 import 'models/models.dart';
+import 'frame_decoder.dart';
 import 'screenshot_saver.dart';
 import 'session.dart';
 import 'widgets/actions.dart';
@@ -27,16 +28,14 @@ import 'widgets/wide_body.dart';
 class RemoteControlPage extends StatefulWidget {
   const RemoteControlPage({
     super.key,
-    required this.client,
+    @visibleForTesting this.client,
     @visibleForTesting this.mediaRemoteSupported,
   });
 
-  /// The link this session runs on. Required rather than defaulted, so a test
-  /// passes a fake and the wire is observable. ADR 0002.
-  ///
-  /// The session follows the Flipper active on it: switching devices moves the
-  /// screen and the buttons to the new one rather than leaving them on the old.
-  final FlipperClient client;
+  /// Link the session talks over. Null takes the app's own client, which is
+  /// what every route does; a test passes a fake so the wire is observable.
+  @visibleForTesting
+  final FlipperClient? client;
 
   /// Overrides the bridge's `Platform.isAndroid` gate. Wrist Remote is
   /// Android-only, so without this a test host never installs the channel
@@ -58,6 +57,10 @@ class _RemoteControlPageState extends State<RemoteControlPage>
   bool _closing = false;
 
   Timer? _recordingTick;
+  Timer? _keyboardResync;
+  OnScreenKeyboard? _screenKeyboard;
+  OnScreenKeyboard? _pendingScreen;
+  int _keyBurst = 0;
 
   @override
   void initState() {
@@ -98,6 +101,7 @@ class _RemoteControlPageState extends State<RemoteControlPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _recordingTick?.cancel();
+    _keyboardResync?.cancel();
     unawaited(_stopMediaRemote());
     _session
       ..removeListener(_onSessionChanged)
@@ -110,13 +114,13 @@ class _RemoteControlPageState extends State<RemoteControlPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      unawaited(guarded('[Remote] resume visuals', _session.resumeVisuals));
+      unawaited(_session.resumeVisuals());
       return;
     }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
-      unawaited(guarded('[Remote] pause visuals', _session.pauseVisuals));
+      unawaited(_session.pauseVisuals());
     }
   }
 
@@ -182,17 +186,152 @@ class _RemoteControlPageState extends State<RemoteControlPage>
   }
 
   void _onRawFrame(RawFrameData frame) {
-    if (_gifRecorder.state != GifRecordingState.recording) return;
-    final autoStop = _gifRecorder.addFrame(frame);
-    if (autoStop && mounted) {
-      _stopGifRecording();
+    if (_gifRecorder.state == GifRecordingState.recording) {
+      final autoStop = _gifRecorder.addFrame(frame);
+      if (autoStop && mounted) {
+        _stopGifRecording();
+      }
     }
+    if (_session.doctorKeyboard) return;
+    _noteScreen(detectOnScreenKeyboard(frame.pixelIndices));
+  }
+
+  RemoteTextKind? get _phoneKind {
+    if (_session.doctorKeyboard) {
+      return switch (_session.keyboardKind) {
+        InputFocusKind.TEXT => RemoteTextKind.text,
+        InputFocusKind.BYTE => RemoteTextKind.byte,
+        InputFocusKind.NUMBER => RemoteTextKind.number,
+        _ => null,
+      };
+    }
+    return _screenKeyboard?.kind;
+  }
+
+  bool _sameKeyboard(OnScreenKeyboard? a, OnScreenKeyboard? b) {
+    if (a == null || b == null) return a == null && b == null;
+    return a.family == b.family &&
+        a.row == b.row &&
+        a.column == b.column &&
+        a.page == b.page &&
+        a.uppercaseByDefault == b.uppercaseByDefault;
+  }
+
+  void _noteScreen(OnScreenKeyboard? found) {
+    if (_keyBurst > 0) {
+      _pendingScreen = found;
+      return;
+    }
+    final kindChanged = found?.kind != _screenKeyboard?.kind;
+    if (_screenKeyboard == null || kindChanged) {
+      _keyboardResync?.cancel();
+      _keyboardResync = null;
+      _pendingScreen = found;
+      _screenKeyboard = found;
+      if (kindChanged && mounted) setState(() {});
+      return;
+    }
+    if (_sameKeyboard(found, _screenKeyboard)) {
+      _keyboardResync?.cancel();
+      _keyboardResync = null;
+      _pendingScreen = found;
+      return;
+    }
+    if (_sameKeyboard(found, _pendingScreen) && _keyboardResync != null) {
+      return;
+    }
+    _pendingScreen = found;
+    _keyboardResync?.cancel();
+    _keyboardResync = Timer(const Duration(milliseconds: 160), () {
+      _keyboardResync = null;
+      if (!mounted || _keyBurst > 0) return;
+      final next = _pendingScreen;
+      final changed = next?.kind != _screenKeyboard?.kind;
+      _screenKeyboard = next;
+      if (changed) setState(() {});
+    });
+  }
+
+  Future<void> _insertText(String text) async {
+    if (_session.doctorKeyboard) {
+      await _session.sendKeyboardInsert(text);
+      return;
+    }
+    for (var i = 0; i < text.length; i++) {
+      await _typeCharacter(text[i]);
+    }
+  }
+
+  Future<void> _typeCharacter(String character) async {
+    final board = _screenKeyboard;
+    if (board == null) return;
+    final plan = planOnScreenEdit(board, character: character);
+    if (plan == null) return;
+    _screenKeyboard = plan.next;
+    _keyBurst++;
+    try {
+      await _session.sendKeySteps(plan.steps);
+    } finally {
+      _keyBurst--;
+    }
+  }
+
+  Future<void> _backspaceText(int count) async {
+    if (_session.doctorKeyboard) {
+      for (var i = 0; i < count; i++) {
+        await _session.sendKeyboardBackspace();
+      }
+      return;
+    }
+    for (var i = 0; i < count; i++) {
+      final board = _screenKeyboard;
+      if (board == null) return;
+      final plan = planOnScreenEdit(board, backspace: true);
+      if (plan == null) return;
+      _screenKeyboard = plan.next;
+      _keyBurst++;
+      try {
+        await _session.sendKeySteps(plan.steps);
+      } finally {
+        _keyBurst--;
+      }
+    }
+  }
+
+  Future<void> _submitText() async {
+    if (_session.doctorKeyboard) {
+      await _session.sendKeyboardSubmit();
+      return;
+    }
+    final board = _screenKeyboard;
+    if (board == null) return;
+    final plan = planOnScreenEdit(board, submit: true);
+    if (plan == null) return;
+    _screenKeyboard = plan.next;
+    _keyBurst++;
+    try {
+      await _session.sendKeySteps(plan.steps);
+    } finally {
+      _keyBurst--;
+    }
+  }
+
+  Widget _phoneField() {
+    final kind = _phoneKind;
+    if (kind == null) return const SizedBox.shrink();
+    return PhoneKeyboardField(
+      key: ValueKey(kind),
+      kind: kind,
+      onInsert: (text) => unawaited(_insertText(text)),
+      onBackspace: (count) => unawaited(_backspaceText(count)),
+      onSubmit: () => unawaited(_submitText()),
+    );
   }
 
   void _startGifRecording() {
     if (_gifRecorder.state != GifRecordingState.idle) return;
     _gifRecorder.start(
-      _session.lastBgColor ?? 0xFFDFDFDF,
+      _session.lastBgColor ?? kFlipperScreenBg,
       _session.lastFgColor ?? 0xFF000000,
     );
     _syncRecordingFlag();
@@ -256,15 +395,17 @@ class _RemoteControlPageState extends State<RemoteControlPage>
       );
       if (mounted) setState(() {});
       final gifBytes = await encodeFuture;
-      if (gifBytes != null) {
-        final path = await saveGifToAppStorage(gifBytes);
+      if (gifBytes != null && mounted) {
+        final path = await saveBytesAs(
+          gifBytes,
+          dialogTitle: context.l10n.remoteExportGif,
+          fileName: 'flipper-recording.gif',
+        );
         savedPath = path;
-        try {
-          await copyGifFileToClipboard(path);
-        } catch (e) {
-          // The file is saved and the screen says where. What does not happen
-          // is the paste the user is about to try.
-          LogService.warn('[Remote] recording saved but not copied: $e');
+        if (path != null) {
+          try {
+            await copyGifFileToClipboard(path);
+          } catch (_) {}
         }
       }
     } catch (e) {
@@ -304,34 +445,7 @@ class _RemoteControlPageState extends State<RemoteControlPage>
     Navigator.of(context).pop();
   }
 
-  void _onConnection() => unawaited(
-    guarded('[Remote] connection dialog', () => promptConnectDevice(context)),
-  );
-
-  // True from entering the settings action until its dialog has closed.
-  //
-  // `_mediaRemote.start()` re-arms the native session - and reloads the
-  // preferences, but only after a load that failed, since `ensureLoaded`
-  // memoizes the one that worked. The action stayed pressable throughout, so a
-  // second press re-synced the native state and stacked a second settings
-  // dialog on the first, both editing the same store. `_copyScreenshot` below
-  // is the same shape with the guard this was missing - including handing the
-  // flag to the action, which the first draft of this left out, so the press
-  // was refused with nothing on screen to show it. #244.
-  bool _openingWristSettings = false;
-
   Future<void> _openWristRemoteSettings() async {
-    if (_openingWristSettings) return;
-    setState(() => _openingWristSettings = true);
-    try {
-      await _wristRemoteSettings();
-    } finally {
-      if (mounted) setState(() => _openingWristSettings = false);
-    }
-  }
-
-  /// The body, with no guard: call [_openWristRemoteSettings].
-  Future<void> _wristRemoteSettings() async {
     Object? startError;
     try {
       // Reconcile again on an explicit settings action. This re-arms a page
@@ -403,8 +517,12 @@ class _RemoteControlPageState extends State<RemoteControlPage>
     try {
       final png = _session.capturePng();
       if (png == null || !mounted) return;
-      final path = await saveScreenshotToAppStorage(png);
-      if (!mounted) return;
+      final path = await saveBytesAs(
+        png,
+        dialogTitle: context.l10n.commonSave,
+        fileName: 'flipper-screenshot.png',
+      );
+      if (!mounted || path == null) return;
       context.showNotification(
         context.l10n.remoteScreenshotSaved(path),
         type: QNotificationType.good,
@@ -432,11 +550,11 @@ class _RemoteControlPageState extends State<RemoteControlPage>
       size: layout.actionsSize,
       gifState: _gifRecorder.state,
       gifElapsedMs: _gifRecorder.elapsedMs,
-      justUnlocked: _session.justUnlocked,
+      isLocked: _session.isLocked,
       savingScreenshot: _savingScreenshot,
       onCopy: _copyScreenshot,
       onSave: _saveScreenshot,
-      onUnlock: _session.unlock,
+      onUnlock: _session.isLocked ? _session.unlock : _session.lock,
       onStartGif: _startGifRecording,
       onPauseResumeGif: _togglePauseGifRecording,
       onStopGif: _stopGifRecording,
@@ -468,28 +586,25 @@ class _RemoteControlPageState extends State<RemoteControlPage>
       frameListenable: _session.frameListenable,
       queue: _session.queue,
       orientation: _session.orientation,
-      connected: _session.inputAvailable,
+      connected: !_session.isDisconnected,
       gifState: _gifRecorder.state,
       gifElapsedMs: _gifRecorder.elapsedMs,
-      justUnlocked: _session.justUnlocked,
+      isLocked: _session.isLocked,
       savingScreenshot: _savingScreenshot,
       onBack: _close,
-      onConnection: _onConnection,
       onCopy: _copyScreenshot,
       onSave: _saveScreenshot,
-      onUnlock: _session.unlock,
+      onUnlock: _session.isLocked ? _session.unlock : _session.lock,
       onStartGif: _startGifRecording,
       onPauseResumeGif: _togglePauseGifRecording,
       onStopGif: _stopGifRecording,
       onCancelGif: _cancelGifRecording,
       onHoldBegin: _onHoldBegin,
       onHoldEnd: _onHoldEnd,
-      // Null while one is opening, so the refused press is visible rather than
-      // merely refused - `savingScreenshot` above does the same job for the
-      // two screenshot actions.
-      onWristRemoteSettings: _mediaRemote.supported && !_openingWristSettings
+      onWristRemoteSettings: _mediaRemote.supported
           ? _openWristRemoteSettings
           : null,
+      keyboard: _phoneKind == null ? null : _phoneField(),
     );
   }
 
@@ -501,6 +616,7 @@ class _RemoteControlPageState extends State<RemoteControlPage>
         Expanded(child: Center(child: _screen(layout))),
         const SizedBox(height: RemoteLayout.gap),
         _controls(layout),
+        if (_phoneKind != null) ...[const SizedBox(height: 8), _phoneField()],
       ],
     );
   }
@@ -514,6 +630,7 @@ class _RemoteControlPageState extends State<RemoteControlPage>
       canPop: false,
       onPopInvokedWithResult: (_, _) => _close(),
       child: RemoteKeyboardListener(
+        enabled: _phoneKind == null,
         onHoldBegin: (b) => unawaited(_session.beginHold(b)),
         onHoldEnd: (b) => unawaited(_session.endHold(b)),
         child: Scaffold(
@@ -521,30 +638,18 @@ class _RemoteControlPageState extends State<RemoteControlPage>
           appBar: wide
               ? null
               : QPageAppBar(
-                  client: _session.client,
                   title: context.l10n.remoteControlTitle,
                   leading: IconButton(
                     onPressed: _close,
                     icon: const Icon(Icons.arrow_back),
                   ),
                   actions: [
-                    IconButton(
-                      tooltip: context.l10n.connectSearch,
-                      onPressed: _onConnection,
-                      icon: const Icon(Icons.search),
-                    ),
                     if (_mediaRemote.supported)
                       IconButton(
                         tooltip: context.l10n.wristRemoteMappingTitle,
-                        // Gated like the wide layout's action below: the two
-                        // entry points are the same handler, and only one of
-                        // them showed the refusal.
-                        onPressed: _openingWristSettings
-                            ? null
-                            : _openWristRemoteSettings,
+                        onPressed: _openWristRemoteSettings,
                         icon: const Icon(Icons.watch_outlined),
                       ),
-                    const SizedBox(width: 8),
                   ],
                 ),
           body: SafeArea(

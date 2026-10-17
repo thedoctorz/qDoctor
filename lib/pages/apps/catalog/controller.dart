@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-import '../../../services/guarded.dart';
 import '../../../services/assembler/controller.dart';
 import '../data/apps_backend.dart';
 import '../data/catalog_api.dart';
@@ -72,10 +71,11 @@ class AppsCatalogController extends ChangeNotifier {
 
   CatalogAppState stateFor(AppCard app) => catalogAppState(
     card: app,
-    manifest: app.id.isNotEmpty
-        ? manifests.byUid(app.id)
-        : manifests.byAlias(app.alias),
+    manifest:
+        (app.id.isNotEmpty ? manifests.byUid(app.id) : null) ??
+        manifests.byAlias(app.alias),
     targetSdk: _backend.targetSdk,
+    apiWindow: _backend.apiMajorWindow,
     ignoreSdkMismatch: _backend.ignoreSdkMismatch,
   );
 
@@ -94,9 +94,7 @@ class AppsCatalogController extends ChangeNotifier {
   AppCategory? categoryFor(AppCard app) => categoryById(app.categoryId);
 
   Future<void> initialize() async {
-    unawaited(
-      guarded('[AppsCatalog] refresh manifests', manifests.ensureFresh),
-    );
+    unawaited(manifests.ensureFresh());
     await _backend.resolveMode();
     await _maybeLoad();
   }
@@ -113,10 +111,8 @@ class AppsCatalogController extends ChangeNotifier {
   }
 
   void _onModeChanged() {
-    unawaited(guarded('[AppsCatalog] refresh on mode change', refresh));
-    if (showsCatalog(_backend.mode.value)) {
-      unawaited(guarded('[AppsCatalog] load on mode change', _maybeLoad));
-    }
+    unawaited(refresh());
+    if (showsCatalog(_backend.mode.value)) unawaited(_maybeLoad());
   }
 
   Future<void> loadCategories() async {

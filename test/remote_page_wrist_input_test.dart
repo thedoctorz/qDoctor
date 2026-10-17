@@ -4,36 +4,17 @@ import 'package:flipperlib/flipperlib.dart' hide DateTime, File;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/media_remote.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/models/models.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/page.dart';
-import 'package:qunleashed/theme/theme.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/media_remote.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/models/models.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/page.dart';
+import 'package:doctormobile/theme/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-import 'quiet_device_title.dart';
 
 /// Enough of a client for the page to open a session over and for the test to
 /// see what actually reached the wire. Shaped like the fakes in
 /// remote_session_test.dart rather than shared with them: those pin the session
 /// in isolation, this one pins what the page does in front of it.
-/// The one link this fake stands for: requests made under it reach the same
-/// client, and it is alive exactly while that client is connected.
-class _FakeBinding implements FlipperSessionBinding {
-  _FakeBinding(this._client);
-
-  final _FakeClient _client;
-
-  @override
-  FlipperDevice? get device => null;
-
-  @override
-  bool get isAlive => _client.isConnected;
-
-  @override
-  T run<T>(T Function() body) => body();
-}
-
-class _FakeClient with QuietDeviceTitle implements FlipperClient {
+class _FakeClient implements FlipperClient {
   final broadcast = StreamController<Main>.broadcast();
   final connection = StreamController<FlipperConnectionState>.broadcast();
   final List<Main> sent = [];
@@ -45,9 +26,6 @@ class _FakeClient with QuietDeviceTitle implements FlipperClient {
 
   @override
   bool get isConnected => connected;
-
-  @override
-  FlipperSessionBinding bindCurrentSession() => _FakeBinding(this);
 
   @override
   Stream<Main> get broadcastStream => broadcast.stream;
@@ -93,7 +71,7 @@ Widget _wrap(Widget child) => MaterialApp(
 );
 
 void main() {
-  const channel = MethodChannel('qunleashed/media_remote');
+  const channel = MethodChannel('doctormobile/media_remote');
   late TestDefaultBinaryMessenger messenger;
   final nativeCalls = <String>[];
 

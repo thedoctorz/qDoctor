@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/components/path.dart';
+import 'package:doctormobile/components/path.dart';
 
 /// A fixed separator keeps the expectations readable and makes the suite
 /// behave the same on every host.

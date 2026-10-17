@@ -2,10 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>FirebaseAppDelegateProxyEnabled</key>
+	<false/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>FlipperMap uses your location to show distance to saved Flipper files.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>qUnleashed keeps sending your location to Flipper apps that request GPS while the app is in the background.</string>
+	<string>DoctorMobile keeps sending your location to Flipper apps that request GPS while the app is in the background.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>This app uses Bluetooth to connect to your Flipper Zero device.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
@@ -15,7 +17,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>qUnleashed</string>
+	<string>DoctorMobile</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>This app saves Flipper screenshots to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -27,7 +29,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>qUnleashed</string>
+	<string>DoctorMobile</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

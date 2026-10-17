@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:qunleashed/services/rpc/network/http_util.dart';
+import 'package:doctormobile/services/rpc/network/http_util.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -13,10 +13,7 @@ Future<void> showConnectionFailedDialog(
   Object error, {
   required bool isBle,
 }) {
-  final (title, text) = describeConnectError(
-    classifyConnectError(error),
-    isBle: isBle,
-  );
+  final (title, text) = _describe(classifyConnectError(error), isBle: isBle);
   return showDialog<void>(
     context: context,
     barrierColor: context.appColors.dialogBarrier,
@@ -31,14 +28,7 @@ Future<void> showConnectionFailedDialog(
   );
 }
 
-/// The title and body a [FlipperConnectErrorKind] is shown as.
-///
-/// Separate from the dialog because it has a second caller that is not one:
-/// the device page's auto-connect hint, which has no gesture behind it and so
-/// no dialog to put this in. Keeping the sentences in one place is the point -
-/// a kind that falls through to `unknown`, or two kinds sharing one sentence,
-/// is a user told the wrong thing, and both have happened here (#120).
-(String, String) describeConnectError(
+(String, String) _describe(
   FlipperConnectErrorKind kind, {
   required bool isBle,
 }) {
@@ -63,15 +53,6 @@ Future<void> showConnectionFailedDialog(
       return (
         strings.connectTooManyDevicesTitle,
         strings.connectTooManyDevicesBody,
-      );
-    // Deliberately not folded into the case above. Both are "no room for
-    // another one", and the sentence a user needs is different for each: that
-    // one is fixed in the system Bluetooth settings, this one by letting go
-    // of a link in the picker this dialog is sitting on top of. #120.
-    case FlipperConnectErrorKind.sessionLimit:
-      return (
-        strings.connectSessionLimitTitle,
-        strings.fmConnectSessionLimitBody(FlipperClient.maxSessions),
       );
     case FlipperConnectErrorKind.busy:
       return (strings.connectBusyTitle, strings.connectBusyBody);

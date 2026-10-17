@@ -2,27 +2,21 @@ import 'dart:io' as io;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/archive/editor/document.dart';
-import 'package:qunleashed/pages/devices/controllers/device.dart';
-import 'package:qunleashed/pages/archive/editor/find_panel.dart';
-import 'package:qunleashed/pages/archive/editor/line_numbers.dart';
-import 'package:qunleashed/pages/archive/editor/page.dart';
-import 'package:qunleashed/pages/archive/editor/syntax.dart';
-import 'package:qunleashed/pages/archive/editor/toolbar.dart';
+import 'package:doctormobile/pages/archive/editor/document.dart';
+import 'package:doctormobile/pages/archive/editor/find_panel.dart';
+import 'package:doctormobile/pages/archive/editor/line_numbers.dart';
+import 'package:doctormobile/pages/archive/editor/page.dart';
+import 'package:doctormobile/pages/archive/editor/syntax.dart';
+import 'package:doctormobile/theme/theme.dart';
 import 'package:re_editor/re_editor.dart';
 
-import 'firmware_fixture.dart';
-
-/// The device the editor's title bar shows, kept for [_closeEditor].
-///
-/// The page is opened from the archive, which is inside the app's device
-/// scope, so the tree here carries one too - a test tree that did not would
-/// be a tree the app does not have. The editor itself has no opinion about
-/// the device; it just has a title bar like every other page.
-late DeviceController _device;
+Widget _wrap(Widget child) => MaterialApp(
+  theme: buildAppTheme(Brightness.dark, const Color(0xFFCC241D)),
+  home: child,
+);
 
 io.File _tempFile(String name, String content) {
-  final dir = io.Directory.systemTemp.createTempSync('qunleashed_editor');
+  final dir = io.Directory.systemTemp.createTempSync('doctormobile_editor');
   addTearDown(() => dir.deleteSync(recursive: true));
   final file = io.File('${dir.path}${io.Platform.pathSeparator}$name')
     ..writeAsStringSync(content);
@@ -30,20 +24,10 @@ io.File _tempFile(String name, String content) {
 }
 
 Future<void> _pumpEditor(WidgetTester tester, Widget page) async {
-  final (device, _) = mountedDevice();
-  _device = device;
-  await tester.pumpWidget(wrapWithDevice(page, device));
+  await tester.pumpWidget(_wrap(page));
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 50));
 }
-
-/// Ends a case that pumped an editor.
-///
-/// In the body rather than a teardown: `DeviceController` starts a DFU
-/// detector that polls on a one-second timer wherever libusb is present -
-/// Linux CI, not a Windows dev box - and the binding checks for live timers
-/// before tearDown runs.
-Future<void> _closeEditor(WidgetTester tester) => closeDevice(tester, _device);
 
 CodeLineEditingController _editor(WidgetTester tester) =>
     tester.widget<CodeEditor>(find.byType(CodeEditor)).controller!;
@@ -180,15 +164,6 @@ void main() {
       expect(find.byType(CodeEditor), findsOneWidget);
       expect(_editor(tester).text, 'DELAY 100\nSTRING hi\nENTER');
       expect(_editor(tester).lineCount, 3);
-      // `re_editor`'s own controller is the one that crashed on a desktop
-      // right click, and nothing else in the suite would notice the page
-      // being pointed back at it (QUNLEASHED-D).
-      expect(
-        tester.widget<CodeEditor>(find.byType(CodeEditor)).toolbarController,
-        isA<EditorSelectionToolbarController>(),
-      );
-
-      await _closeEditor(tester);
     });
 
     testWidgets('selects text across several lines', (tester) async {
@@ -202,8 +177,6 @@ void main() {
 
       controller.selectAll();
       expect(controller.selectedText, 'one\ntwo\nthree');
-
-      await _closeEditor(tester);
     });
 
     testWidgets('opens a big file without building every line', (tester) async {
@@ -223,8 +196,6 @@ void main() {
       final rendered = _gutter(tester).notifier.value?.paragraphs ?? const [];
       expect(rendered, isNotEmpty);
       expect(rendered.length, lessThan(120));
-
-      await _closeEditor(tester);
     });
 
     testWidgets('marks an edited line and saves it back through the hook', (
@@ -257,8 +228,6 @@ void main() {
       expect(file.readAsStringSync(), 'DELAY 100\nSTRING bye\nENTER');
       expect(uploaded, isNotNull);
       expect(String.fromCharCodes(uploaded!), contains('STRING bye'));
-
-      await _closeEditor(tester);
     });
 
     testWidgets('keeps the line break the file came with', (tester) async {
@@ -277,8 +246,6 @@ void main() {
       await _save(tester);
 
       expect(file.readAsStringSync(), 'DELAY 100\r\nSTRING bye\r\nENTER');
-
-      await _closeEditor(tester);
     });
 
     testWidgets('finds matches from the app bar', (tester) async {
@@ -293,8 +260,6 @@ void main() {
       await tester.enterText(find.widgetWithText(TextField, 'Find'), 'STRING');
       await _waitForMatches(tester);
       expect(find.text('1/2'), findsOneWidget);
-
-      await _closeEditor(tester);
     });
 
     testWidgets('reports a failed save and stays on the page', (tester) async {
@@ -309,8 +274,6 @@ void main() {
 
       expect(find.text('Save failed'), findsOneWidget);
       expect(find.byType(TextEditorPage), findsOneWidget);
-
-      await _closeEditor(tester);
     });
   });
 }

@@ -5,32 +5,11 @@ import '../../../components/dialogs/confirm.dart';
 import '../../../components/progress_button.dart';
 import '../../../theme/theme.dart';
 import 'cuid_dict_format.dart';
-import 'existed_keys_storage.dart';
 import 'recover_controller.dart';
 import 'recover_models.dart';
 
-import 'package:flipperlib/flipperlib.dart';
-
 class RecoverPage extends StatefulWidget {
-  const RecoverPage({super.key, required this.client, this.controller});
-
-  /// The Flipper this run belongs to. Required rather than defaulted: the
-  /// route builder is handed a context with a DeviceScope above it, so a
-  /// default would only hide which device a recovery ran against. ADR 0002.
-  final FlipperClient client;
-
-  /// The controller this page drives, built here when nothing supplies one.
-  ///
-  /// A seam, and only that - the page owns whichever it ends up with and
-  /// disposes it. Without one there is no way to reach a finished run in a
-  /// test: the controller would be built here with the four native recoverers,
-  /// and the states worth asserting about (a run that was stopped, a run that
-  /// failed) are exactly the ones those recoverers produce.
-  ///
-  /// An optional instance rather than a factory, which is the shape every other
-  /// seam in this app uses - MapToolController's `storage`, PaintController's
-  /// `display`. ADR 0002.
-  final RecoverController? controller;
+  const RecoverPage({super.key});
 
   @override
   State<RecoverPage> createState() => _RecoverPageState();
@@ -42,9 +21,7 @@ class _RecoverPageState extends State<RecoverPage> {
   @override
   void initState() {
     super.initState();
-    _controller =
-        (widget.controller ?? RecoverController(client: widget.client))
-          ..addListener(_onChanged);
+    _controller = RecoverController()..addListener(_onChanged);
     _controller.start();
   }
 
@@ -67,50 +44,6 @@ class _RecoverPageState extends State<RecoverPage> {
     cancelLabel: context.l10n.mfStopCancel,
   );
 
-  /// Stops the run without leaving the page.
-  ///
-  /// Behind the same confirmation as backing out: those strings ask only
-  /// whether to stop, not what becomes of the keys, so they are honest for
-  /// both. The outcomes are not the same - this keeps what the run has found
-  /// and leaving does not - which is the reason the button exists. Until it
-  /// did, the engine's Stop was reachable only by popping the page, so the only
-  /// way to interrupt an attack was to discard every key it had recovered.
-  ///
-  /// Disabled rather than hidden once asked for: a hardnested bucket can take a
-  /// moment to reach its next check, and a button that vanishes mid-tap reads
-  /// as a misfire.
-  /// `danger`, because stopping is the destructive half of a running job -
-  /// matching how [QConfirmDialog] tints the Stop it puts behind this. That is
-  /// the substantive change: an OutlinedButton's default foreground is already
-  /// `colorScheme.primary`, i.e. accent, so what moves here is accent to
-  /// danger, the border (which did come from an un-overridden
-  /// `ColorScheme.outline`), the disabled pair, and the text metrics.
-  Widget _stopButton(BuildContext context) {
-    final colors = context.appColors;
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: OutlinedButton(
-        onPressed: _controller.cancelled
-            ? null
-            : () async {
-                if (await _confirmAbort()) _controller.stop();
-              },
-        style: OutlinedButton.styleFrom(
-          foregroundColor: colors.danger,
-          disabledForegroundColor: colors.textMuted,
-          side: BorderSide(
-            color: _controller.cancelled ? colors.divider : colors.danger,
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-        ),
-        child: Text(
-          context.l10n.mfStopConfirm,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
@@ -131,8 +64,11 @@ class _RecoverPageState extends State<RecoverPage> {
         body: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            _StatusBlock(controller: _controller),
-            if (_controller.canStop) _stopButton(context),
+            _StatusBlock(
+              state: _controller.state,
+              totalUnits: _controller.totalUnits,
+              doneUnits: _controller.doneUnits,
+            ),
             ..._buildGroups(_controller),
           ],
         ),
@@ -320,63 +256,42 @@ class _EntryRow extends StatelessWidget {
 }
 
 class _StatusBlock extends StatelessWidget {
-  const _StatusBlock({required this.controller});
+  const _StatusBlock({
+    required this.state,
+    required this.totalUnits,
+    required this.doneUnits,
+  });
 
-  final RecoverController controller;
-
-  RecoverState get state => controller.state;
-  int get totalUnits => controller.totalUnits;
-  int get doneUnits => controller.doneUnits;
-
-  /// Keys this run derived that are still listed below and not on the device.
-  /// A key the dictionary already held is not at risk and does not count.
-  /// Computed here rather than on every build, since only an error reads it.
-  int get _recoveredThisRun =>
-      controller.entries.where((e) => e.key != null && e.isNew == true).length;
+  final RecoverState state;
+  final int totalUnits;
+  final int doneUnits;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.appColors;
-    // A recovery unit runs to completion with no sub-progress, and units vary
+    // Each recovery unit runs to completion with no sub-progress, and units vary
     // wildly in duration (a hardnested attack dwarfs an mfkey32 one), so a
     // percentage freezes between units and misleads. Instead the recovery bar
     // animates (liveness) and, when there is more than one unit, shows how many
     // are done. A null barText hides the bar (the terminal Saved / Error states).
-    //
-    // The two transfers are the exception and do carry a percentage: both know
-    // their size up front, and both are long enough on a slow link that an
-    // animated bar alone reads as a hang rather than as work.
     final (String title, String? barText, double? progress) = switch (state) {
       RecoverWaitingForDevice() => (l10n.mfConnecting, '…', null),
       RecoverDownloading(:final progress) => (
         l10n.mfDownloading,
-        _percent(progress),
+        progress == null ? '…' : '${(progress * 100).round()}%',
         progress,
       ),
-      // The unit counter always shows: it is the only run-level progress there
-      // is, and a phase that can measure itself adds a percentage rather than
-      // replacing it.
-      RecoverCalculating(:final label, :final fraction) => (
-        label ?? l10n.mfRecovering,
-        _calculatingBar(fraction),
-        fraction,
+      RecoverCalculating() => (
+        l10n.mfRecovering,
+        totalUnits > 1 ? '$doneUnits / $totalUnits' : '…',
+        null,
       ),
-      RecoverUploading(:final progress) => (
-        l10n.mfSyncing,
-        _percent(progress),
-        progress,
+      RecoverUploading() => (l10n.mfSyncing, '…', null),
+      RecoverSaved(:final keys, :final hasCandidates, :final hasFailures) => (
+        _savedTitle(keys.length, hasCandidates, hasFailures),
+        null,
+        null,
       ),
-      RecoverSaved(
-        :final keys,
-        :final hasCandidates,
-        :final hasFailures,
-        :final stopped,
-      ) =>
-        (
-          _savedTitle(keys.length, hasCandidates, hasFailures, stopped),
-          null,
-          null,
-        ),
       RecoverError(:final errorType) => (_errorText(errorType), null, null),
     };
 
@@ -405,99 +320,14 @@ class _StatusBlock extends StatelessWidget {
             showPercent: false,
             height: 46,
           ),
-        // First, because it changes what every line under it means: "no new
-        // keys" after a Stop is a statement about two sectors, not twelve.
-        // Without it a part-finished run and a complete one read identically.
-        if (state case RecoverSaved(stopped: true)) ...[
-          // Only once a plan exists: a Stop during the download has no steps to
-          // have got through, and the headline already says so.
-          if (totalUnits > 0)
-            _Footnote(l10n.mfStoppedEarly(controller.doneUnits, totalUnits)),
-          // The way back. A Stop lands in the same terminal state a finished
-          // run does, which offered nothing to press - so the only way to run
-          // again was to leave the page and come back, since that is what
-          // builds a fresh controller and starts it. Nothing in the controller
-          // needed changing: _run() clears _cancelled before it does anything
-          // else, which is what makes a second start safe.
-          //
-          // Restart, never resume. The engine keeps no checkpoint - a stopped
-          // attack frees its candidate statelists and the Sum(a8) guess it was
-          // working through is recorded nowhere - so continuing is not a thing
-          // that can be offered, and a button promising it would lie.
-          _again(context, l10n.mfRunAgain, controller.start),
-        ],
-        // The run is only half done when candidates were written: the Flipper
-        // has to try them against the card itself, and nothing said so. A user
-        // who does not know that reads "saved" as "finished".
-        if (state case RecoverSaved(skippedKnown: final skipped)
-            when skipped > 0)
-          _Footnote(l10n.mfSkippedKnown(skipped)),
-        if (state case RecoverSaved(hasCandidates: true))
-          _Footnote(l10n.mfVerifyOnDevice),
-        if (state case RecoverError(:final errorType)) ...[
-          if (_recoveredThisRun > 0)
-            _Footnote(l10n.mfKeysKept(_recoveredThisRun)),
-          // Only under the error they are about. A copy left by an earlier run
-          // is still on the card, but saying so under an unrelated connection
-          // failure attaches it to the wrong thing.
-          if (errorType == RecoverErrorType.saveFailed) ...[
-            if (controller.dictBackupKept)
-              _Footnote(l10n.mfBackupKept(flipperDictUserBackupPath)),
-            if (controller.dictBackupFailed) _Footnote(l10n.mfBackupLost),
-          ],
-          // A failed save is the one error whose work is still in memory, so
-          // it retries the write alone rather than the whole run.
-          _again(
-            context,
-            l10n.commonRetry,
-            errorType == RecoverErrorType.saveFailed
-                ? controller.retrySave
-                : controller.start,
-          ),
-        ],
       ],
     );
   }
 
-  /// The one place a fraction becomes text. Null reads as "working" rather than
-  /// as 0%, which is a different thing to tell someone.
-  static String _percent(double? fraction) =>
-      fraction == null ? '…' : '${(fraction * 100).round()}%';
-
-  /// Whichever pieces of progress exist, joined: the run's unit counter when
-  /// there is more than one unit, and the current unit's own fraction when the
-  /// phase can measure itself. A measurable phase adds to the counter rather
-  /// than replacing it - the counter is the only run-level progress there is.
-  String _calculatingBar(double? fraction) {
-    final parts = [
-      if (totalUnits > 1) '$doneUnits / $totalUnits',
-      if (fraction != null) _percent(fraction),
-    ];
-    return parts.isEmpty ? '…' : parts.join(' · ');
-  }
-
-  static String _savedTitle(
-    int newKeys,
-    bool hasCandidates,
-    bool hadFailure,
-    bool stopped,
-  ) {
+  static String _savedTitle(int newKeys, bool hasCandidates, bool hadFailure) {
     final String base;
-    // A Stop that landed before anything was attacked has no count to report
-    // and no plan to report it against - the step footnote below would read
-    // "0 of 0". "No new keys added" would be true and useless: it is the same
-    // sentence a finished run that found nothing shows.
-    if (stopped && newKeys == 0 && !hasCandidates && !hadFailure) {
-      return l10n.mfStoppedNothingYet;
-    }
     if (newKeys > 0) {
-      // Candidates named alongside the count rather than instead of it. An
-      // `else if` here used to drop them from the headline entirely whenever a
-      // run also found an ordinary key, which is the common case - and the
-      // candidates are the half that still needs the user to do something.
-      base = hasCandidates
-          ? l10n.mfCandidatesAlso(l10n.mfKeysAdded(newKeys))
-          : l10n.mfKeysAdded(newKeys);
+      base = l10n.mfKeysAdded(newKeys);
     } else if (hasCandidates) {
       base = l10n.mfCandidatesSaved;
     } else if (hadFailure) {
@@ -513,57 +343,5 @@ class _StatusBlock extends StatelessWidget {
     RecoverErrorType.readWrite => l10n.mfErrorStorage,
     RecoverErrorType.flipperConnection => l10n.mfErrorNotConnected,
     RecoverErrorType.recoveryFailed => l10n.mfErrorUnexpected,
-    RecoverErrorType.saveFailed => l10n.mfSaveFailedAfterRecovery,
   };
-}
-
-/// The button a terminal state offers.
-///
-/// One spelling for the error branch and a stopped run, because they render the
-/// same control - but the caller supplies the label, because they do not offer
-/// the same thing. "Retry" is right after a failure and wrong after a
-/// deliberate Stop, where what is on offer is a fresh run from the start.
-Widget _again(BuildContext context, String label, VoidCallback onPressed) {
-  final colors = context.appColors;
-  return Padding(
-    padding: const EdgeInsets.only(top: 12),
-    child: FilledButton(
-      onPressed: onPressed,
-      // Padding and text metrics, to match the app's other buttons. The two
-      // colours are deliberately redundant: buildAppTheme already sets
-      // colorScheme.primary/onPrimary to accent/onAccent and a FilledButton
-      // resolves its defaults to exactly those, so they change nothing on
-      // screen. Named anyway so this reads the same as the Stop button beside
-      // it, where the colours do differ.
-      style: FilledButton.styleFrom(
-        backgroundColor: colors.accent,
-        foregroundColor: colors.onAccent,
-        padding: const EdgeInsets.symmetric(vertical: 12),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-      ),
-    ),
-  );
-}
-
-/// A muted line under the status block: the one place the screen explains what
-/// the user has to do next, rather than what just happened.
-class _Footnote extends StatelessWidget {
-  const _Footnote(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: TextStyle(color: context.appColors.textMuted, fontSize: 12),
-      ),
-    );
-  }
 }

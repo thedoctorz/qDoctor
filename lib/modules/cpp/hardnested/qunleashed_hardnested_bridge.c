@@ -1,5 +1,5 @@
 //-----------------------------------------------------------------------------
-// qUnleashed host-side hardnested bridge.
+// DoctorMobile host-side hardnested bridge.
 //
 // The Flipper firmware only collects nonces (into .nested.log); the whole
 // hardnested attack (Meijer/Verdult ciphertext-only cryptanalysis) runs here on

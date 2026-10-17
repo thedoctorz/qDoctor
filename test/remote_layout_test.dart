@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/gif_recorder.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/layout.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/models/models.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/widgets/action_bar.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/widgets/actions.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/widgets/controls.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/widgets/screen.dart';
-import 'package:qunleashed/theme/theme.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/gif_recorder.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/layout.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/models/models.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/widgets/action_bar.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/widgets/actions.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/widgets/controls.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/widgets/screen.dart';
+import 'package:doctormobile/theme/theme.dart';
 
 const _tolerance = 0.5;
 
@@ -220,10 +220,9 @@ void main() {
                         size: layout.actionsSize,
                         gifState: state,
                         gifElapsedMs: 12300,
-                        justUnlocked: false,
+                        isLocked: false,
                         savingScreenshot: false,
                         onBack: () {},
-                        onConnection: () {},
                         onCopy: () async {},
                         onSave: () async {},
                         onUnlock: () async {},
@@ -236,7 +235,7 @@ void main() {
                         size: layout.actionsSize,
                         gifState: state,
                         gifElapsedMs: 12300,
-                        justUnlocked: false,
+                        isLocked: false,
                         savingScreenshot: false,
                         onCopy: () async {},
                         onSave: () async {},

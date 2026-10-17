@@ -2,15 +2,54 @@ import '../../../../services/localization/l10n.dart';
 
 import 'dart:math' as math;
 
-import '../../../../services/settings/persist.dart';
-import '../../../../services/settings/store.dart';
+import 'package:applemap/applemap.dart';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../../services/logging.dart';
-import '../../../../services/prefs_reader.dart';
 import 'carto_key.dart';
 import 'providers.dart';
 
+export 'package:applemap/applemap.dart' show AppleMapStyle;
+
 export 'providers.dart';
+
+enum MapEngine {
+  system,
+  tiles;
+
+  static bool get systemAvailable => AppleMap.isSupported;
+
+  String get label => switch (this) {
+    MapEngine.system => l10n.mapEngineSystem,
+    MapEngine.tiles => l10n.mapEngineTiles,
+  };
+
+  String get description => switch (this) {
+    MapEngine.system => l10n.mapEngineSystemDesc,
+    MapEngine.tiles => l10n.mapEngineTilesDesc,
+  };
+
+  static MapEngine parse(String? raw) => MapEngine.values.firstWhere(
+    (value) => value.name == raw,
+    orElse: () => systemAvailable ? MapEngine.system : MapEngine.tiles,
+  );
+}
+
+extension AppleMapStyleLabels on AppleMapStyle {
+  String get label => switch (this) {
+    AppleMapStyle.standard => l10n.mapSystemStyleStandard,
+    AppleMapStyle.muted => l10n.mapSystemStyleMuted,
+    AppleMapStyle.satellite => l10n.mapSystemStyleSatellite,
+    AppleMapStyle.hybrid => l10n.mapSystemStyleHybrid,
+  };
+
+  String get description => switch (this) {
+    AppleMapStyle.standard => l10n.mapSystemStyleStandardDesc,
+    AppleMapStyle.muted => l10n.mapSystemStyleMutedDesc,
+    AppleMapStyle.satellite => l10n.mapSystemStyleSatelliteDesc,
+    AppleMapStyle.hybrid => l10n.mapSystemStyleHybridDesc,
+  };
+}
 
 enum MapAppearance {
   auto,
@@ -57,11 +96,13 @@ class MapTileConfig {
   final bool missingKey;
 }
 
-class MapSettings extends PrefsBackedSettings {
+class MapSettings extends ChangeNotifier {
   MapSettings._();
 
   static final MapSettings instance = MapSettings._();
 
+  static const String _prefEngine = 'map.engine';
+  static const String _prefSystemStyle = 'map.system.style';
   static const String _prefProvider = 'map.tiles.provider';
   static const String _prefAppearance = 'map.tiles.appearance';
   static const String _prefRetina = 'map.tiles.retina';
@@ -79,41 +120,33 @@ class MapSettings extends PrefsBackedSettings {
 
   static const double defaultMaxZoom = 19;
 
-  /// The range a value is held to, on the way in and on the way out. It
-  /// reaches `TileLayer.maxZoom`, where a zero or a negative is a custom
-  /// layer that draws nothing and a negative also throws out of the preview's
-  /// `1 << maxZoom.floor()`. The prompt that sets it offers no range of its
-  /// own - it is a number field - so these two clamps are the whole of it.
-  static const double minCustomZoom = 2;
-  static const double maxCustomZoom = 22;
+  bool _loaded = false;
+  Future<void>? _loading;
 
-  /// Named so [reset] and the fallbacks in [_load] cannot drift from the
-  /// initialisers below, which is the drift [reset] exists to prevent.
-  static const MapAppearance _defaultAppearance = MapAppearance.auto;
-  static const String _defaultCustomUrl = '';
-  static const String _defaultCustomSubdomains = '';
-  static const bool _defaultRetina = true;
-  static const bool _defaultAutoCenter = false;
-  static const bool _defaultTrackDevice = false;
-  static const bool _defaultScanSubfolders = true;
-
-  /// A getter rather than a const: it needs [l10n], which follows a locale
-  /// the user can change while the app runs. Routed through [mapProviderById]
-  /// so the initialiser, [reset] and the fallback inside that function are
-  /// one expression rather than three copies of "the default is Carto".
-  static MapTileProvider get _defaultProvider => mapProviderById(null);
-
-  late MapTileProvider _provider = _defaultProvider;
-  MapAppearance _appearance = _defaultAppearance;
+  MapEngine _engine = MapEngine.systemAvailable
+      ? MapEngine.system
+      : MapEngine.tiles;
+  AppleMapStyle _systemStyle = AppleMapStyle.standard;
+  late MapTileProvider _provider = EmbeddedTileKey.available
+      ? cartoProvider(l10n)
+      : osmProvider(l10n);
+  MapAppearance _appearance = MapAppearance.auto;
   final Map<String, String> _designs = <String, String>{};
   final Map<String, String> _keys = <String, String>{};
-  String _customUrl = _defaultCustomUrl;
-  String _customSubdomains = _defaultCustomSubdomains;
+  String _customUrl = '';
+  String _customSubdomains = '';
   double _customMaxZoom = defaultMaxZoom;
-  bool _retina = _defaultRetina;
-  bool _autoCenter = _defaultAutoCenter;
-  bool _trackDevice = _defaultTrackDevice;
-  bool _scanSubfolders = _defaultScanSubfolders;
+  bool _retina = true;
+  bool _autoCenter = false;
+  bool _trackDevice = false;
+  bool _scanSubfolders = true;
+
+  bool get loaded => _loaded;
+
+  MapEngine get engine => MapEngine.systemAvailable ? _engine : MapEngine.tiles;
+  AppleMapStyle get systemStyle => _systemStyle;
+
+  bool get useSystemMap => engine == MapEngine.system;
 
   MapTileProvider get provider => _provider;
   MapAppearance get appearance => _appearance;
@@ -149,70 +182,49 @@ class MapSettings extends PrefsBackedSettings {
     return provider.defaultDesign(dark: dark);
   }
 
-  /// The two l10n calls below cannot throw either - QLocaleController only
-  /// ever holds a supported locale, which setLocale asserts - so this store
-  /// is all-or-nothing like its siblings.
-  @override
-  void readFrom(PrefsReader reader) {
-    _provider = mapProviderById(reader.orNull<String>(_prefProvider));
-    _appearance = MapAppearance.parse(reader.orNull<String>(_prefAppearance));
+  Future<void> load() {
+    if (_loaded) return Future.value();
+    return _loading ??= _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    _engine = MapEngine.parse(prefs.getString(_prefEngine));
+    _systemStyle = AppleMapStyle.parse(prefs.getString(_prefSystemStyle));
+    _appearance = MapAppearance.parse(prefs.getString(_prefAppearance));
     for (final provider in mapTileProviders(l10n)) {
       for (final dark in const [false, true]) {
         final pref = _designPref(provider.id, dark);
-        final stored = reader.orNull<String>(pref);
+        final stored = prefs.getString(pref);
         if (stored != null) _designs[pref] = stored;
       }
-      final key = reader.orNull<String>(_keyPref(provider.id));
+      final key = prefs.getString(_keyPref(provider.id));
       if (key != null && key.isNotEmpty) _keys[provider.id] = key;
     }
-    _customUrl = reader.or(_prefCustomUrl, _defaultCustomUrl);
-    _customSubdomains = reader.or(
-      _prefCustomSubdomains,
-      _defaultCustomSubdomains,
-    );
-    // Clamped like the write path. A stored 0 predates this - getDouble
-    // read one too - and accepting whole numbers adds a second route to it,
-    // so this is closing an old hole rather than one the widening opened.
-    _customMaxZoom = reader
-        .or(_prefCustomMaxZoom, defaultMaxZoom)
-        .clamp(minCustomZoom, maxCustomZoom)
-        .toDouble();
-    _retina = reader.or(_prefRetina, _defaultRetina);
-    _autoCenter = reader.or(_prefAutoCenter, _defaultAutoCenter);
-    _trackDevice = reader.or(_prefTrackDevice, _defaultTrackDevice);
-    _scanSubfolders = reader.or(_prefScanSubfolders, _defaultScanSubfolders);
-
-    // Nothing says a stored value was *rejected*: an API key raises the
-    // missing-key notice as though none had ever been entered, a custom
-    // URL quietly draws OpenStreetMap instead, and the toggles just come
-    // back different.
-    reader.report('[MapSettings]');
+    _provider = _providerFromPrefs(prefs.getString(_prefProvider));
+    if (_provider.id == kCartoProviderId && !hasKey(_provider)) {
+      _provider = osmProvider(l10n);
+      await prefs.setString(_prefProvider, _provider.id);
+    }
+    _customUrl = prefs.getString(_prefCustomUrl) ?? '';
+    _customSubdomains = prefs.getString(_prefCustomSubdomains) ?? '';
+    _customMaxZoom = prefs.getDouble(_prefCustomMaxZoom) ?? defaultMaxZoom;
+    _retina = prefs.getBool(_prefRetina) ?? true;
+    _autoCenter = prefs.getBool(_prefAutoCenter) ?? false;
+    _trackDevice = prefs.getBool(_prefTrackDevice) ?? false;
+    _scanSubfolders = prefs.getBool(_prefScanSubfolders) ?? true;
+    _loaded = true;
+    _loading = null;
+    notifyListeners();
   }
 
-  /// The error carries a stack when it is an Error - a TypeError out of the
-  /// platform decoder, which is the corrupted store this exists for - and
-  /// none when it is a PlatformException from a store that will not open.
-  /// LogService.describe is the one place that difference is handled.
-  @override
-  void onLoadFailed(Object error, StackTrace stack) {
-    LogService.warn(
-      '[MapSettings] load failed: ${LogService.describe(error, stack)}',
-    );
-  }
-
-  @override
-  void resetFields() {
-    _provider = _defaultProvider;
-    _appearance = _defaultAppearance;
-    _designs.clear();
-    _keys.clear();
-    _customUrl = _defaultCustomUrl;
-    _customSubdomains = _defaultCustomSubdomains;
-    _customMaxZoom = defaultMaxZoom;
-    _retina = _defaultRetina;
-    _autoCenter = _defaultAutoCenter;
-    _trackDevice = _defaultTrackDevice;
-    _scanSubfolders = _defaultScanSubfolders;
+  MapTileProvider _providerFromPrefs(String? id) {
+    if (id == null) {
+      return EmbeddedTileKey.available
+          ? cartoProvider(l10n)
+          : osmProvider(l10n);
+    }
+    return mapProviderById(id);
   }
 
   bool darkFor(bool appDark) => switch (_appearance) {
@@ -221,24 +233,36 @@ class MapSettings extends PrefsBackedSettings {
     MapAppearance.dark => true,
   };
 
+  Future<void> setEngine(MapEngine value) async {
+    if (_engine == value) return;
+    _engine = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefEngine, value.name);
+  }
+
+  Future<void> setSystemStyle(AppleMapStyle value) async {
+    if (_systemStyle == value) return;
+    _systemStyle = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefSystemStyle, value.name);
+  }
+
   Future<void> setProvider(MapTileProvider value) async {
     if (_provider.id == value.id) return;
     _provider = value;
     notifyListeners();
-    await persistSetting(
-      _prefProvider,
-      (prefs) => prefs.setString(_prefProvider, value.id),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefProvider, value.id);
   }
 
   Future<void> setAppearance(MapAppearance value) async {
     if (_appearance == value) return;
     _appearance = value;
     notifyListeners();
-    await persistSetting(
-      _prefAppearance,
-      (prefs) => prefs.setString(_prefAppearance, value.name),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefAppearance, value.name);
   }
 
   Future<void> setDesign(MapTileProvider provider, MapTileDesign design) async {
@@ -246,7 +270,8 @@ class MapSettings extends PrefsBackedSettings {
     if (_designs[pref] == design.id) return;
     _designs[pref] = design.id;
     notifyListeners();
-    await persistSetting(pref, (prefs) => prefs.setString(pref, design.id));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(pref, design.id);
   }
 
   Future<void> setKey(MapTileProvider provider, String value) async {
@@ -258,8 +283,8 @@ class MapSettings extends PrefsBackedSettings {
       _keys[provider.id] = key;
     }
     notifyListeners();
-    final pref = _keyPref(provider.id);
-    await persistSetting(pref, (prefs) => prefs.setString(pref, key));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyPref(provider.id), key);
   }
 
   Future<void> setCustomUrl(String value) async {
@@ -267,10 +292,8 @@ class MapSettings extends PrefsBackedSettings {
     if (_customUrl == url) return;
     _customUrl = url;
     notifyListeners();
-    await persistSetting(
-      _prefCustomUrl,
-      (prefs) => prefs.setString(_prefCustomUrl, url),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefCustomUrl, url);
   }
 
   Future<void> setCustomSubdomains(String value) async {
@@ -278,61 +301,49 @@ class MapSettings extends PrefsBackedSettings {
     if (_customSubdomains == raw) return;
     _customSubdomains = raw;
     notifyListeners();
-    await persistSetting(
-      _prefCustomSubdomains,
-      (prefs) => prefs.setString(_prefCustomSubdomains, raw),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefCustomSubdomains, raw);
   }
 
   Future<void> setCustomMaxZoom(double value) async {
-    final zoom = value.clamp(minCustomZoom, maxCustomZoom).toDouble();
+    final zoom = value.clamp(2, 22).toDouble();
     if (_customMaxZoom == zoom) return;
     _customMaxZoom = zoom;
     notifyListeners();
-    await persistSetting(
-      _prefCustomMaxZoom,
-      (prefs) => prefs.setDouble(_prefCustomMaxZoom, zoom),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_prefCustomMaxZoom, zoom);
   }
 
   Future<void> setRetina(bool value) async {
     if (_retina == value) return;
     _retina = value;
     notifyListeners();
-    await persistSetting(
-      _prefRetina,
-      (prefs) => prefs.setBool(_prefRetina, value),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefRetina, value);
   }
 
   Future<void> setAutoCenter(bool value) async {
     if (_autoCenter == value) return;
     _autoCenter = value;
     notifyListeners();
-    await persistSetting(
-      _prefAutoCenter,
-      (prefs) => prefs.setBool(_prefAutoCenter, value),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefAutoCenter, value);
   }
 
   Future<void> setTrackDevice(bool value) async {
     if (_trackDevice == value) return;
     _trackDevice = value;
     notifyListeners();
-    await persistSetting(
-      _prefTrackDevice,
-      (prefs) => prefs.setBool(_prefTrackDevice, value),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefTrackDevice, value);
   }
 
   Future<void> setScanSubfolders(bool value) async {
     if (_scanSubfolders == value) return;
     _scanSubfolders = value;
     notifyListeners();
-    await persistSetting(
-      _prefScanSubfolders,
-      (prefs) => prefs.setBool(_prefScanSubfolders, value),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefScanSubfolders, value);
   }
 
   MapTileConfig resolve({required bool dark}) {
@@ -342,6 +353,12 @@ class MapSettings extends PrefsBackedSettings {
 
   MapTileConfig configFor(MapTileProvider provider, MapTileDesign design) {
     if (provider.isCustom) return _customConfig();
+    if (provider.id == kCartoProviderId &&
+        keyOf(provider).isEmpty &&
+        !hasEmbeddedKey) {
+      final osm = osmProvider(l10n);
+      return configFor(osm, osm.designs.first);
+    }
     var template = design.template ?? provider.template!;
     template = template.replaceAll('{design}', design.id);
     final own = keyOf(provider);

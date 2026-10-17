@@ -42,12 +42,14 @@ class GroupedCard extends StatelessWidget {
   const GroupedCard({
     super.key,
     this.onTap,
+    this.onLongPress,
     this.padding = kGroupedCardPadding,
     this.background,
     required this.child,
   });
 
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final EdgeInsetsGeometry padding;
   final Widget? background;
   final Widget child;
@@ -57,6 +59,7 @@ class GroupedCard extends StatelessWidget {
     final colors = context.appColors;
     final content = InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Padding(padding: padding, child: child),
     );
     return Material(
@@ -94,6 +97,7 @@ class GroupedCardList<T> extends StatelessWidget {
     required this.items,
     required this.itemBuilder,
     this.onTap,
+    this.onLongPress,
     this.cardPadding = kGroupedCardPadding,
     this.backgroundBuilder,
     this.wrapItems = true,
@@ -104,6 +108,7 @@ class GroupedCardList<T> extends StatelessWidget {
   final List<T> items;
   final Widget Function(BuildContext context, T item) itemBuilder;
   final VoidCallback? Function(T item)? onTap;
+  final VoidCallback? Function(T item)? onLongPress;
   final EdgeInsetsGeometry cardPadding;
   final Widget? Function(T item)? backgroundBuilder;
 
@@ -135,6 +140,7 @@ class GroupedCardList<T> extends StatelessWidget {
               child: wrapItems
                   ? GroupedCard(
                       onTap: onTap?.call(items[i]),
+                      onLongPress: onLongPress?.call(items[i]),
                       padding: cardPadding,
                       background: backgroundBuilder?.call(items[i]),
                       child: itemBuilder(context, items[i]),

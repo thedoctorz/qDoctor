@@ -1,6 +1,6 @@
 {
   "@@locale": "ru",
-  "appTitle": "qUnleashed",
+  "appTitle": "DoctorMobile",
   "@appTitle": {
     "description": "Application name shown in the OS task switcher. Product name, keep untranslated."
   },
@@ -301,7 +301,7 @@
   "@pushAppReleases": {
     "description": "Toggle: notify about new stable versions of this app."
   },
-  "pushAppReleasesSubtitle": "Новые версии приложения qUnleashed.",
+  "pushAppReleasesSubtitle": "Новые версии приложения DoctorMobile.",
   "@pushAppReleasesSubtitle": {
     "description": "Explanation under the App releases toggle."
   },
@@ -2681,6 +2681,10 @@
   "@appsErrorNotConnected": {
     "description": "Error shown when an operation needs a connected Flipper."
   },
+  "appsErrorLinkLost": "Соединение с Flipper прервалось во время установки; переподключитесь и повторите",
+  "@appsErrorLinkLost": {
+    "description": "Error shown when an install or uninstall was abandoned because the Flipper link kept dropping or did not come back."
+  },
   "fliblerConsoleTitle": "Сборщик",
   "@fliblerConsoleTitle": {
     "description": "Title of the build console screen."
@@ -2930,7 +2934,7 @@
   "@toolSavedLocations": {
     "description": "Tool that shows saved files on a map by where they were recorded."
   },
-  "toolSavedLocationsSubtitle": "Просмотр сохранённых файлов по месту записи",
+  "toolSavedLocationsSubtitle": "Просмотр синхронизированных файлов по месту записи",
   "@toolSavedLocationsSubtitle": {
     "description": "Explanation of the saved locations tool."
   },
@@ -2942,7 +2946,7 @@
   "@toolAboutSubtitle": {
     "description": "Explanation of the about entry in the tools list."
   },
-  "appVersionLine": "qUnleashed для {platform} v{version}{suffix}",
+  "appVersionLine": "DoctorMobile для {platform} v{version}{suffix}",
   "@appVersionLine": {
     "description": "Version line at the bottom of the tools screen; tapping it copies the whole line. {platform} is the OS name. {version} is the version with its channel suffix, like '0.15.0-dev'. {suffix} is the build number and short commit in brackets, like ' (108080 · abc1234)'. Neither {version} nor {suffix} is translated.",
     "placeholders": {
@@ -4455,6 +4459,10 @@
   "@remoteUnlock": {
     "description": "Button that unlocks the Flipper screen."
   },
+  "remoteLock": "Заблокировать",
+  "@remoteLock": {
+    "description": "Button that locks the Flipper screen."
+  },
   "remoteUnlocked": "Разблокировано",
   "@remoteUnlocked": {
     "description": "Label shown after the Flipper screen was unlocked."
@@ -5816,9 +5824,17 @@
   "@emuHintButtons": {
     "description": "Hint under the emulation controls for files run from the Flipper itself. The line break is intentional."
   },
-  "mapNoSyncedFlipper": "Синхронизированный Flipper не найден. Сначала подключитесь и синхронизируйтесь в разделе «Архив».",
+  "mapNoSyncedFlipper": "Синхронизированный Flipper не найден. Сначала подключитесь и синхронизируйте файлы в разделе «Архив».",
   "@mapNoSyncedFlipper": {
     "description": "Shown on the map when no archive has been synced yet."
+  },
+  "mapSyncToSeeLocations": "Синхронизируйте файлы в разделе «Архив», чтобы показать места, сохранённые на Flipper.",
+  "@mapSyncToSeeLocations": {
+    "description": "Shown on the map when the phone has no geotagged copies of Flipper files."
+  },
+  "mapOpenArchive": "Открыть архив",
+  "@mapOpenArchive": {
+    "description": "Button on the map empty state that switches to the Archive tab so the user can sync."
   },
   "mapLocationDisabled": "Службы геолокации отключены",
   "@mapLocationDisabled": {
@@ -5872,6 +5888,62 @@
         "type": "String"
       }
     }
+  },
+  "mapEngineSection": "Карта",
+  "@mapEngineSection": {
+    "description": "Heading for the choice between the system map and a tile server."
+  },
+  "mapEngineSystem": "Apple Maps",
+  "@mapEngineSystem": {
+    "description": "Map engine option that uses the system map on iOS."
+  },
+  "mapEngineSystemDesc": "Встроенная карта iOS. Без ключа и тайл-сервера",
+  "@mapEngineSystemDesc": {
+    "description": "Explanation of the system map option."
+  },
+  "mapEngineTiles": "Тайл-сервер",
+  "@mapEngineTiles": {
+    "description": "Map engine option that draws raster tiles from a provider."
+  },
+  "mapEngineTilesDesc": "Растровые тайлы OpenStreetMap или другого источника",
+  "@mapEngineTilesDesc": {
+    "description": "Explanation of the tile server map option."
+  },
+  "mapSystemStyle": "Подложка",
+  "@mapSystemStyle": {
+    "description": "Heading for the system map's own basemap choice."
+  },
+  "mapSystemStyleStandard": "Стандартная",
+  "@mapSystemStyleStandard": {
+    "description": "System map basemap: the ordinary street map."
+  },
+  "mapSystemStyleStandardDesc": "Обычная карта улиц",
+  "@mapSystemStyleStandardDesc": {
+    "description": "Explanation of the standard system basemap."
+  },
+  "mapSystemStyleMuted": "Приглушённая",
+  "@mapSystemStyleMuted": {
+    "description": "System map basemap with the colour turned down."
+  },
+  "mapSystemStyleMutedDesc": "Улицы с приглушённым цветом, чтобы метки были заметнее",
+  "@mapSystemStyleMutedDesc": {
+    "description": "Explanation of the muted system basemap."
+  },
+  "mapSystemStyleSatellite": "Спутник",
+  "@mapSystemStyleSatellite": {
+    "description": "System map basemap showing satellite imagery."
+  },
+  "mapSystemStyleSatelliteDesc": "Снимки без подписей",
+  "@mapSystemStyleSatelliteDesc": {
+    "description": "Explanation of the satellite system basemap."
+  },
+  "mapSystemStyleHybrid": "Гибрид",
+  "@mapSystemStyleHybrid": {
+    "description": "System map basemap showing satellite imagery with labels."
+  },
+  "mapSystemStyleHybridDesc": "Снимки с названиями улиц",
+  "@mapSystemStyleHybridDesc": {
+    "description": "Explanation of the hybrid system basemap."
   },
   "mapAppearanceSystem": "Как в приложении",
   "@mapAppearanceSystem": {
@@ -6623,339 +6695,513 @@
   "@widgetGroupCaption": {
     "description": "Header of the widget caption switch and size choice."
   },
-  "toolSeedRecovery": "Восстановление seed Sub-GHz",
-  "@toolSeedRecovery": {
-    "description": "Title of the SubGHz rolling-code seed recovery tool."
+  "toolDecodeRaw": "Декодировать RAW",
+  "@toolDecodeRaw": {
+    "description": "Tool that decodes Sub-GHz RAW captures on a connected Flipper."
   },
-  "toolSeedRecoverySubtitle": "Восстановление пультов FAAC, Genius и Erreka",
-  "@toolSeedRecoverySubtitle": {
-    "description": "Subtitle of the SubGHz seed recovery tool. It names the manufacturers whose SeedManufacturer.advertised is true; BFT is solved but not listed, because the firmware recovers those itself. test/seed_models_test.dart holds this sentence to that field, so a name added or removed here fails."
+  "toolDecodeRawSubtitle": "Декодирование Sub-GHz RAW-записей протоколами Flipper",
+  "@toolDecodeRawSubtitle": {
+    "description": "Explanation of the Decode RAW tool."
   },
-  "seedTitle": "Восстановление seed Sub-GHz",
-  "@seedTitle": {
-    "description": "Title of the seed recovery page."
+  "decodeRawLoadFromFlipper": "Загрузить с Flipper (.sub)",
+  "@decodeRawLoadFromFlipper": {
+    "description": "Button that lists RAW Sub-GHz files on the Flipper."
   },
-  "seedNoCaptures": "На этом Flipper нет захватов",
-  "@seedNoCaptures": {
-    "description": "Shown when the device holds no seed capture files."
+  "decodeRawPickFile": "Открыть локальный файл",
+  "@decodeRawPickFile": {
+    "description": "Button that picks a local RAW .sub file to upload and decode."
   },
-  "seedNoCapturesHint": "Воспользуйтесь приложением Seed Capturer на Flipper, чтобы записать пульт, и возвращайтесь.",
-  "@seedNoCapturesHint": {
-    "description": "Hint under the empty capture list, naming the app that creates them."
+  "decodeRawConnectFirst": "Сначала подключите Flipper.",
+  "@decodeRawConnectFirst": {
+    "description": "Shown when Decode RAW is used with no Flipper connected."
   },
-  "seedCapturesTitle": "Захваты",
-  "@seedCapturesTitle": {
-    "description": "Header above the list of capture files."
+  "decodeRawNotImplemented": "Обновите прошивку Doctor, чтобы декодировать RAW из приложения.",
+  "@decodeRawNotImplemented": {
+    "description": "Shown when the connected firmware does not implement Decode RAW RPC."
   },
-  "seedRefresh": "Обновить",
-  "@seedRefresh": {
-    "description": "Button that re-reads the capture list from the device."
+  "decodeRawEmpty": "В /ext/subghz нет RAW-файлов .sub.",
+  "@decodeRawEmpty": {
+    "description": "Empty state of the Decode RAW file picker."
   },
-  "seedHops": "{count, plural, one{{count} нажатие} few{{count} нажатия} many{{count} нажатий} other{{count} нажатия}}",
-  "@seedHops": {
-    "description": "How many button presses a capture holds.",
+  "decodeRawSyncArchive": "Синхронизируйте Sub-GHz в разделе «Архив», чтобы увидеть записи с Flipper.",
+  "@decodeRawSyncArchive": {
+    "description": "Shown when Decode RAW has no synced Sub-GHz archive and the Flipper is offline."
+  },
+  "decodeRawNoHits": "В этой записи не найдено ни одного протокола.",
+  "@decodeRawNoHits": {
+    "description": "Shown when Decode RAW finished without any protocol hits."
+  },
+  "decodeRawDecoding": "Декодирование RAW",
+  "@decodeRawDecoding": {
+    "description": "Progress title while the Flipper is decoding a RAW file."
+  },
+  "decodeRawHits": "{count, plural, =0{Нет совпадений} one{{count} совпадение} few{{count} совпадения} many{{count} совпадений} other{{count} совпадений}}",
+  "@decodeRawHits": {
+    "description": "Running or final count of decoded protocol hits.",
     "placeholders": {
       "count": {
         "type": "int"
       }
     }
   },
-  "seedFix": "Фикс. код",
-  "@seedFix": {
-    "description": "Label for the remote's fixed code."
+  "decodeRawSave": "Сохранить",
+  "@decodeRawSave": {
+    "description": "Button that writes one decoded hit to /ext/subghz."
   },
-  "seedSeed": "Seed",
-  "@seedSeed": {
-    "description": "Label for the recovered seed."
+  "decodeRawSaveAll": "Сохранить все",
+  "@decodeRawSaveAll": {
+    "description": "Button that writes every decoded hit to /ext/subghz."
   },
-  "seedCounter": "Счётчик",
-  "@seedCounter": {
-    "description": "Label for the counter inside the last decrypted hop."
-  },
-  "seedManufacturer": "Производитель",
-  "@seedManufacturer": {
-    "description": "Label for the remote's brand."
-  },
-  "seedFrequency": "Частота",
-  "@seedFrequency": {
-    "description": "Label for the capture's frequency."
-  },
-  "seedStart": "Восстановить seed",
-  "@seedStart": {
-    "description": "Button that starts the search."
-  },
-  "seedStop": "Остановить",
-  "@seedStop": {
-    "description": "Button that stops a running search."
-  },
-  "seedStopTitle": "Остановить восстановление seed?",
-  "@seedStopTitle": {
-    "description": "Title of the confirmation shown before stopping a search."
-  },
-  "seedStopMessage": "Поиск остановится там, где он есть. Всё уже найденное сохранится.",
-  "@seedStopMessage": {
-    "description": "Body of the stop confirmation."
-  },
-  "seedStopCancel": "Продолжить",
-  "@seedStopCancel": {
-    "description": "Cancel button of the stop confirmation."
-  },
-  "seedSearching": "Поиск в пространстве seed…",
-  "@seedSearching": {
-    "description": "Shown while a search runs."
-  },
-  "seedFound": "Seed восстановлен",
-  "@seedFound": {
-    "description": "Shown when a search succeeds."
-  },
-  "seedUnverified": "Seed найден, но кадр не удалось воспроизвести",
-  "@seedUnverified": {
-    "description": "Shown when a seed was found but re-encrypting did not reproduce the capture."
-  },
-  "seedUnverifiedHint": "Seed показан для справки. Пульт нельзя сохранить как файл для передачи. Более длинный захват может это решить: нажмите кнопку пульта ещё несколько раз и сделайте захват снова.",
-  "@seedUnverifiedHint": {
-    "description": "Explains why saving is unavailable after an unverified result, and what to try. TRANSLATORS: 'may settle it' is deliberately hedged - more hops let the engine reject a seed it could not verify, but for a long capture the fault is elsewhere and another capture will not help."
-  },
-  "seedNothingMatched": "Ни один seed не подошёл к этому захвату",
-  "@seedNothingMatched": {
-    "description": "Shown when the whole space was swept with no match."
-  },
-  "seedNothingMatchedHint": "Это не значит, что пульт невозможно восстановить. В этом приложении есть ключи только для четырёх производителей, поэтому проверьте, верно ли указан бренд. Несколько пропущенных нажатий не беда, но чем больше нажатий, тем лучше — нажмите кнопку пульта несколько раз рядом с Flipper и сделайте захват снова.",
-  "@seedNothingMatchedHint": {
-    "description": "Explains what a no-match result actually means and what to do."
-  },
-  "seedStopped": "Поиск остановлен",
-  "@seedStopped": {
-    "description": "Shown when the user stopped the search."
-  },
-  "seedEngineBusy": "Другое восстановление уже выполняется",
-  "@seedEngineBusy": {
-    "description": "Shown when the engine refuses a second concurrent search."
-  },
-  "seedEngineBroken": "Эта сборка движка восстановления неисправна",
-  "@seedEngineBroken": {
-    "description": "Shown when the engine's own self-tests fail."
-  },
-  "seedEngineFault": "Движок восстановления дал сбой",
-  "@seedEngineFault": {
-    "description": "Shown when the engine reports a fault."
-  },
-  "seedLowConfidence": "Подкреплено лишь {count} нажатиями, поэтому не предлагается для передачи: при двух неверный ответ возможен. От {needed} и больше он маловероятен, хотя никогда не исключён полностью. Запишите ещё одно-два нажатия и попробуйте снова.",
-  "@seedLowConfidence": {
-    "description": "Explains that a result came from too few hops to be saved, and what to do about it.",
+  "decodeRawSaved": "Сохранено: {name}",
+  "@decodeRawSaved": {
+    "description": "Toast after a decoded hit was written to the Flipper. {name} is the file name.",
     "placeholders": {
-      "count": {
-        "type": "int"
-      },
-      "needed": {
-        "type": "int"
-      }
-    }
-  },
-  "seedSave": "Сохранить на Flipper",
-  "@seedSave": {
-    "description": "Button that writes the recovered remote to the device."
-  },
-  "seedSaved": "Сохранено в {path}",
-  "@seedSaved": {
-    "description": "Shown after the recovered remote is written.",
-    "placeholders": {
-      "path": {
-        "type": "String"
-      }
-    }
-  },
-  "seedSaveNoFrequency": "У этого захвата нет частоты, поэтому пульт нельзя сохранить как файл для передачи.",
-  "@seedSaveNoFrequency": {
-    "description": "Explains why saving is unavailable when the capture carries no frequency."
-  },
-  "seedNameTitle": "Назовите файл",
-  "@seedNameTitle": {
-    "description": "Title of the dialog asking what to call the recovered remote."
-  },
-  "seedNameHelp": "Сохраняется в {dir}. Доступно {max} символов.",
-  "@seedNameHelp": {
-    "description": "Helper text under the file name field. TRANSLATORS: {dir} is a path and is not translated; {max} is an exact figure, currently 63, so choose the grammatical case for 'characters' to match a plain number. This sentence used to warn that a non-English name fits fewer; it no longer needs to, because such a name is refused outright now and the field says so on the first keystroke.",
-    "placeholders": {
-      "dir": {
-        "type": "String"
-      },
-      "max": {
-        "type": "int"
-      }
-    }
-  },
-  "commonNameEmpty": "Введите имя.",
-  "@commonNameEmpty": {
-    "description": "Shown when a name field has been left empty, or holds nothing but spaces. Only the prompts that are not QNameDialog render this - that dialog keeps its confirm button disabled and says nothing, because an error on a field the user has just cleared reads as a complaint about their typing.",
-    "placeholders": {}
-  },
-  "commonNameTooLong": "Используйте более короткое имя — не более {max} символов.",
-  "@commonNameTooLong": {
-    "description": "Shown when a typed file name is longer than the storage it is being written to will carry. TRANSLATORS: {max} is an exact figure - 255 for a file on the Flipper's storage, 63 for a Sub-GHz name, because that app's own save buffer holds less - so render it as a plain number and choose the grammatical case for 'characters' to match, as there is no plural form on this placeholder. The sentence names no owner for the limit on purpose, since it is shown for both. The limit is counted in bytes, but every name it can appear for is ASCII, so 'characters' is what the user sees and is not a lie. Replaces seedNameTooLong.",
-    "placeholders": {
-      "max": {
-        "type": "int"
-      }
-    }
-  },
-  "commonNameIllegal": "Имя не может содержать {chars}",
-  "@commonNameIllegal": {
-    "description": "Shown when a typed file name holds a character the storage cannot carry. Do not spell the characters out in the translation: {chars} is the list, passed in from the one place the app declares it, so that adding or removing one cannot leave this sentence behind.",
-    "placeholders": {
-      "chars": {
-        "type": "String"
-      }
-    }
-  },
-  "commonNameControlChar": "Имя не может содержать невидимый символ. Вставьте его в обычное текстовое поле или наберите вручную.",
-  "@commonNameControlChar": {
-    "description": "Shown when a typed file name holds a C0 control character or DEL - a tab, a newline, or similar. Named separately from commonNameIllegal because that sentence lists the characters it refuses, and these have no printable form to list. A keyboard cannot type one; a paste from a spreadsheet or a web page can carry one in.",
-    "placeholders": {}
-  },
-  "commonNameNonAscii": "В имени Flipper принимает только английские буквы, цифры и базовую пунктуацию.",
-  "@commonNameNonAscii": {
-    "description": "Shown when a typed file name holds a character outside ASCII. TRANSLATORS: 'English letters' means the unaccented Latin A-Z and a-z, and nothing else - German ß, Cyrillic я and an emoji are all refused, so do not render this as 'letters of the English language' in a way that leaves accented Latin sounding acceptable. 'Basic punctuation' is deliberately vague rather than a list: most ASCII punctuation is fine, and the nine characters that are not are refused by their own message, commonNameIllegal, which carries the list. Say that the Flipper refuses the name, not that the name is invalid - the same name is perfectly fine on the phone, and it is the device that will not carry it.",
-    "placeholders": {}
-  },
-  "commonNameDotEdge": "Имя не может начинаться или заканчиваться точкой.",
-  "@commonNameDotEdge": {
-    "description": "Shown when a typed file name begins or ends with a period."
-  },
-  "seedReplaceTitle": "Заменить файл?",
-  "@seedReplaceTitle": {
-    "description": "Title of the dialog shown when the chosen file name is already taken."
-  },
-  "seedReplaceMessage": "{path} уже существует на Flipper. Сохранение перезапишет его.",
-  "@seedReplaceMessage": {
-    "description": "Body of the confirmation shown before an existing file is overwritten.",
-    "placeholders": {
-      "path": {
-        "type": "String"
-      }
-    }
-  },
-  "seedReplace": "Заменить",
-  "@seedReplace": {
-    "description": "Confirm button that overwrites the existing file."
-  },
-  "seedReplaceUnknown": "{path} не удалось проверить. Если файл там уже есть, сохранение заменит его.",
-  "@seedReplaceUnknown": {
-    "description": "Body of the overwrite confirmation when the device did not answer whether the file exists.",
-    "placeholders": {
-      "path": {
-        "type": "String"
-      }
-    }
-  },
-  "seedListFailed": "Папку захватов не удалось прочитать, поэтому этот список может быть устаревшим.",
-  "@seedListFailed": {
-    "description": "Shown when listing the capture folder failed on a connected device."
-  },
-  "seedInvalidName": "Такое имя файла нельзя использовать на Flipper.",
-  "@seedInvalidName": {
-    "description": "Shown when a save was refused because of the name rather than by the device."
-  },
-  "seedDeleteCaptureTitle": "Удалить захват?",
-  "@seedDeleteCaptureTitle": {
-    "description": "Title of the prompt offered after the remote has been saved."
-  },
-  "seedDeleteCaptureMessage": "Пульт сохранён как {path}, поэтому {name} больше не нужен. Удаление оставит в папке захватов только те пульты, которые ещё не разгаданы.",
-  "@seedDeleteCaptureMessage": {
-    "description": "Body of the prompt offering to remove a capture that has been solved and saved.",
-    "placeholders": {
-      "path": {
-        "type": "String"
-      },
       "name": {
         "type": "String"
       }
     }
   },
-  "seedDeleteRowMessage": "Удалить {name} с устройства? Захват — единственная запись пульта, и если его пульт ещё не восстановлен и не сохранён, чтобы получить новый, придётся снова стоять рядом с тем пультом.",
-  "@seedDeleteRowMessage": {
-    "description": "Body of the prompt shown when a capture is deleted from the list rather than right after a save, where it is not known whether the remote was ever recovered.",
+  "decodeRawSaveFailed": "Не удалось сохранить: {error}",
+  "@decodeRawSaveFailed": {
+    "description": "Error when writing a decoded .sub failed.",
     "placeholders": {
-      "name": {
-        "type": "String",
-        "example": "faac_2026-10-07_14-21.seed"
+      "error": {
+        "type": "String"
       }
     }
   },
-  "seedDeleteCapture": "Удалить захват",
-  "@seedDeleteCapture": {
-    "description": "Confirm button that removes the solved capture from the device."
+  "decodeRawInvalidFile": "Это не RAW-файл Flipper Sub-GHz.",
+  "@decodeRawInvalidFile": {
+    "description": "Shown when the picked file is not a RAW Sub-GHz capture."
   },
-  "seedKeepCapture": "Оставить",
-  "@seedKeepCapture": {
-    "description": "Decline button that leaves the solved capture on the device."
+  "decodeRawListingFolders": "Чтение папок…",
+  "@decodeRawListingFolders": {
+    "description": "Shown while walking /ext/subghz before file headers are checked."
   },
-  "seedDeleteFailed": "Захват не удалось удалить. Возможно, он всё ещё на устройстве.",
-  "@seedDeleteFailed": {
-    "description": "Shown when removing a capture fails. Says nothing about a saved remote, because a capture can be deleted from the list without having been solved this session. Says \"may\" because a delete that timed out might have landed and lost only its acknowledgement."
-  },
-  "seedListingStale": "Эти захваты получены через соединение, которого больше нет. Потяните вниз, чтобы прочитать папку снова.",
-  "@seedListingStale": {
-    "description": "Shown when a delete is refused because the file list belongs to a session that is no longer live. The remedy is to re-list, not to retry."
-  },
-  "seedDeleteUnconfirmed": "{name} удалён, но устройство этого не подтвердило. Обновите, чтобы убедиться.",
-  "@seedDeleteUnconfirmed": {
-    "description": "Neutral notice, not an error: the delete was accepted but the follow-up check went unanswered, so the row was dropped on the acknowledgement alone.",
+  "decodeRawCaptureSummary": "{pulses} смп.  ·  {seconds} с",
+  "@decodeRawCaptureSummary": {
+    "description": "Capture size chip over the decode waveform: sample count and length in seconds, the same readout the Flipper's Read RAW screen shows.",
     "placeholders": {
-      "name": {
-        "type": "String",
-        "example": "faac_2026-10-07_14-21.seed"
+      "pulses": {
+        "type": "int"
+      },
+      "seconds": {
+        "type": "String"
       }
     }
   },
-  "seedRefreshed": "{count, plural, =0{На устройстве нет захватов} one{{count} захват на устройстве} few{{count} захвата на устройстве} many{{count} захватов на устройстве} other{{count} захвата на устройстве}}",
-  "@seedRefreshed": {
-    "description": "Said after the capture list has been re-read, so the button has a visible result even when nothing changed.",
+  "decodeRawFetchingCapture": "Загрузка записи… {percent}%",
+  "@decodeRawFetchingCapture": {
+    "description": "Shown over the waveform while the .sub is pulled off the Flipper, with how much of it has arrived.",
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
+  },
+  "decodeRawReadingCapture": "Чтение записи…",
+  "@decodeRawReadingCapture": {
+    "description": "Shown over the waveform while the .sub is pulled off the Flipper and parsed, before the decode starts."
+  },
+  "decodeRawListingProgress": "{done}/{total} — проверка заголовков RAW",
+  "@decodeRawListingProgress": {
+    "description": "Progress while sniffing .sub headers on the Flipper.",
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "decodeRawListingFailed": "Не удалось получить список: {error}",
+  "@decodeRawListingFailed": {
+    "description": "Error when listing RAW files on the Flipper failed.",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "decodeRawUploadFailed": "Не удалось загрузить: {error}",
+  "@decodeRawUploadFailed": {
+    "description": "Error when uploading a local RAW file to the Flipper failed.",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "decodeRawFailed": "Ошибка декодирования: {error}",
+  "@decodeRawFailed": {
+    "description": "Error when the Decode RAW RPC failed for a reason other than missing firmware support.",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "decodeRawPickerTitle": "Выбор RAW-файла",
+  "@decodeRawPickerTitle": {
+    "description": "Title of the Decode RAW file picker."
+  },
+  "decodeRawHitReady": "Декодированный файл ключа",
+  "@decodeRawHitReady": {
+    "description": "Fallback subtitle for a decoded hit with no Key/Serial/Btn fields."
+  },
+  "decodeRawNew": "Декодировать другой",
+  "@decodeRawNew": {
+    "description": "Button that returns from Decode RAW results to pick another file."
+  },
+  "decodeRawSavedCount": "{count, plural, one{Сохранён {count} ключ} few{Сохранено {count} ключа} many{Сохранено {count} ключей} other{Сохранено {count} ключей}}",
+  "@decodeRawSavedCount": {
+    "description": "Confirmation after Save all writes decoded keys to the Flipper.",
     "placeholders": {
       "count": {
         "type": "int"
       }
     }
   },
-  "seedSkippedLines": "{count, plural, one{{count} примечание к этому захвату} few{{count} примечания к этому захвату} many{{count} примечаний к этому захвату} other{{count} примечания к этому захвату}}",
-  "@seedSkippedLines": {
-    "description": "How many remarks the parser made about the capture file - a line it could not read, a hop it dropped for repeating the one before it, or a count that disagrees with the file.",
+  "decodeRawCancel": "Отмена",
+  "@decodeRawCancel": {
+    "description": "Button that stops a running decode on the Flipper."
+  },
+  "decodeRawCancelling": "Остановка…",
+  "@decodeRawCancelling": {
+    "description": "Shown between asking the Flipper to stop and it stopping."
+  },
+  "decodeRawCancelled": "Декодирование остановлено. Найденные совпадения сохранены.",
+  "@decodeRawCancelled": {
+    "description": "Shown on the results screen after the user cancelled a decode."
+  },
+  "decodeRawConnectionLost": "Flipper отключился во время декодирования.",
+  "@decodeRawConnectionLost": {
+    "description": "Shown when the link drops while a decode is running."
+  },
+  "decodeRawUploadedTo": "Скопировано на Flipper в {path}.",
+  "@decodeRawUploadedTo": {
+    "description": "Tells the user a locally picked file was written to the SD card to be decoded.",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "decodeRawDetails": "Файл ключа",
+  "@decodeRawDetails": {
+    "description": "Title of the sheet showing one decoded hit in full."
+  },
+  "decodeRawCopy": "Копировать",
+  "@decodeRawCopy": {
+    "description": "Button that copies a decoded key file to the clipboard."
+  },
+  "decodeRawCopied": "Скопировано в буфер обмена",
+  "@decodeRawCopied": {
+    "description": "Confirmation after copying a key file."
+  },
+  "toolSubghzRx": "Приёмник Sub-GHz",
+  "@toolSubghzRx": {
+    "description": "Tool that drives the Flipper radio live from the phone."
+  },
+  "toolSubghzRxSubtitle": "Приём, декодирование и передача с телефона",
+  "@toolSubghzRxSubtitle": {
+    "description": "Explanation of the live Sub-GHz receiver tool."
+  },
+  "subghzRxNotImplemented": "Обновите прошивку Doctor, чтобы управлять приёмником из приложения.",
+  "@subghzRxNotImplemented": {
+    "description": "Shown when the firmware has no live receive RPC."
+  },
+  "subghzRxStart": "Начать приём",
+  "@subghzRxStart": {
+    "description": "Button that starts a live receive session."
+  },
+  "subghzRxStop": "Остановить",
+  "@subghzRxStop": {
+    "description": "Button that ends a live receive session."
+  },
+  "subghzRxListening": "Приём на {frequency}",
+  "@subghzRxListening": {
+    "description": "Status line while a receive session runs.",
+    "placeholders": {
+      "frequency": {
+        "type": "String"
+      }
+    }
+  },
+  "subghzRxIdle": "Радио не активно",
+  "@subghzRxIdle": {
+    "description": "Status line before a receive session is started."
+  },
+  "subghzRxBusy": "Flipper занят — сначала закройте приложение на его экране.",
+  "@subghzRxBusy": {
+    "description": "Shown when the firmware refuses the radio because an app owns it."
+  },
+  "subghzRxNoDevice": "Внешний радиомодуль не подключён.",
+  "@subghzRxNoDevice": {
+    "description": "Shown when the external CC1101 was selected but is missing."
+  },
+  "subghzRxFailed": "Ошибка приёмника: {error}",
+  "@subghzRxFailed": {
+    "description": "Generic failure from the live receive session.",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "subghzRxStoppedByDevice": "Flipper завершил сеанс приёма.",
+  "@subghzRxStoppedByDevice": {
+    "description": "Shown when the firmware stops receiving on its own."
+  },
+  "subghzRxSignals": "{count, plural, =0{Сигналов пока нет} one{{count} сигнал} few{{count} сигнала} many{{count} сигналов} other{{count} сигналов}}",
+  "@subghzRxSignals": {
+    "description": "Count of decoded signals in the live receive list.",
     "placeholders": {
       "count": {
         "type": "int"
       }
     }
   },
-  "seedLoading": "Чтение захвата…",
-  "@seedLoading": {
-    "description": "Shown while a capture file is read off the device."
+  "subghzRxWaiting": "Ожидание сигнала…",
+  "@subghzRxWaiting": {
+    "description": "Empty state of the live receive signal list."
   },
-  "seedDisconnected": "Flipper не подключён",
-  "@seedDisconnected": {
-    "description": "Shown when the capture list could not be read because the link is down."
+  "subghzRxRepeats": "×{count}",
+  "@subghzRxRepeats": {
+    "description": "How many times an identical signal was seen.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
-  "seedUnreadableCapture": "Этот захват нельзя использовать",
-  "@seedUnreadableCapture": {
-    "description": "Shown when a capture file was read but could not be parsed into a job."
+  "subghzRxNoiseFloor": "Шум {value} дБм",
+  "@subghzRxNoiseFloor": {
+    "description": "Noise floor readout under the RSSI waveform.",
+    "placeholders": {
+      "value": {
+        "type": "int"
+      }
+    }
   },
-  "seedReadFailed": "Захват не удалось прочитать с Flipper",
-  "@seedReadFailed": {
-    "description": "Shown when reading a capture file off the device failed."
+  "subghzRxConfig": "Настройки радио",
+  "@subghzRxConfig": {
+    "description": "Title of the live receive configuration sheet."
   },
-  "seedSaveFailed": "Пульт не удалось сохранить на Flipper",
-  "@seedSaveFailed": {
-    "description": "Shown when writing the recovered .sub to the device failed."
+  "subghzRxFrequency": "Частота",
+  "@subghzRxFrequency": {
+    "description": "Frequency field in the receiver settings."
   },
-  "seedEngineUnavailable": "В этой сборке отсутствует движок восстановления",
-  "@seedEngineUnavailable": {
-    "description": "Shown when the native library could not be loaded at all."
+  "subghzRxModulation": "Модуляция",
+  "@subghzRxModulation": {
+    "description": "Modulation preset field in the receiver settings."
   },
-  "seedEngineBusyHint": "Дождитесь завершения текущего поиска, затем попробуйте снова.",
-  "@seedEngineBusyHint": {
-    "description": "Hint under the busy message."
+  "subghzRxRadio": "Радиомодуль",
+  "@subghzRxRadio": {
+    "description": "Internal vs external radio field in the receiver settings."
   },
-  "seedEngineBrokenHint": "С этим захватом ничего не поможет: движок восстановления в этой сборке не работает. Пожалуйста, сообщите об этом.",
-  "@seedEngineBrokenHint": {
-    "description": "Hint shown when the recovery engine in this build is not working: it failed its own checks, is missing from the build, or answered something this build cannot read. TRANSLATORS: the point is that nothing the user does with this capture will help."
+  "subghzRxRadioInternal": "Встроенный",
+  "@subghzRxRadioInternal": {
+    "description": "The Flipper built-in CC1101."
+  },
+  "subghzRxRadioExternal": "Внешний",
+  "@subghzRxRadioExternal": {
+    "description": "An external CC1101 module."
+  },
+  "subghzRxHopping": "Перебор частот",
+  "@subghzRxHopping": {
+    "description": "Toggle that sweeps the hopper frequency list."
+  },
+  "subghzRxCapturePulses": "Записывать форму сигнала",
+  "@subghzRxCapturePulses": {
+    "description": "Toggle that makes each hit carry its pulse train."
+  },
+  "subghzRxCapturePulsesHint": "Добавляет около килобайта на каждый сигнал по каналу связи.",
+  "@subghzRxCapturePulsesHint": {
+    "description": "Cost warning under the pulse capture toggle."
+  },
+  "subghzRxApply": "Применить",
+  "@subghzRxApply": {
+    "description": "Button that commits the receiver settings."
+  },
+  "subghzRxPulseTrain": "Форма сигнала",
+  "@subghzRxPulseTrain": {
+    "description": "Heading over the captured pulse train of a signal."
+  },
+  "subghzRxNoPulses": "Включите запись формы сигнала в настройках радио, чтобы увидеть импульсы.",
+  "@subghzRxNoPulses": {
+    "description": "Shown in place of a waveform when pulse capture was off."
+  },
+  "subghzRxTransmit": "Передать",
+  "@subghzRxTransmit": {
+    "description": "Button that replays a received signal through the Flipper."
+  },
+  "subghzRxTransmitting": "Передача…",
+  "@subghzRxTransmitting": {
+    "description": "Shown while the Flipper transmits."
+  },
+  "subghzRxTransmitted": "Передано на {frequency}",
+  "@subghzRxTransmitted": {
+    "description": "Confirmation after a successful transmit.",
+    "placeholders": {
+      "frequency": {
+        "type": "String"
+      }
+    }
+  },
+  "subghzRxTransmitForbidden": "Передача на этой частоте запрещена в вашем регионе.",
+  "@subghzRxTransmitForbidden": {
+    "description": "Shown when the firmware refuses a transmit for regional reasons."
+  },
+  "subghzRxTransmitUnsupported": "Этот протокол нельзя передать.",
+  "@subghzRxTransmitUnsupported": {
+    "description": "Shown for a decoded protocol with no encoder."
+  },
+  "subghzRxTransmitFailed": "Ошибка передачи: {error}",
+  "@subghzRxTransmitFailed": {
+    "description": "Generic transmit failure.",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "subghzRxTransmitConfirm": "Передать {protocol} на {frequency}?",
+  "@subghzRxTransmitConfirm": {
+    "description": "Confirmation prompt before the Flipper transmits.",
+    "placeholders": {
+      "protocol": {
+        "type": "String"
+      },
+      "frequency": {
+        "type": "String"
+      }
+    }
+  },
+  "subghzRxSave": "Сохранить на Flipper",
+  "@subghzRxSave": {
+    "description": "Button that writes a received signal to /ext/subghz."
+  },
+  "subghzRxClear": "Очистить список",
+  "@subghzRxClear": {
+    "description": "Button that empties the received signal list."
+  },
+  "archiveDecodeRaw": "Декодировать RAW",
+  "@archiveDecodeRaw": {
+    "description": "Button that opens a RAW Sub-GHz file in the Decode RAW tool."
+  },
+  "subghzRxSettingsUnavailable": "Подключите Flipper, чтобы прочитать его таблицы частот и пресетов.",
+  "@subghzRxSettingsUnavailable": {
+    "description": "Shown in the receiver settings when the device tables have not been read."
+  },
+  "subghzRxModulationHopping": "Перебор модуляций",
+  "@subghzRxModulationHopping": {
+    "description": "Toggle that alternates two modulation presets while hopping."
+  },
+  "subghzRxModulationHoppingHint": "Чередует два пресета при каждом переходе.",
+  "@subghzRxModulationHoppingHint": {
+    "description": "Explanation under the modulation hopping toggle."
+  },
+  "subghzRxModulationB": "Вторая модуляция",
+  "@subghzRxModulationB": {
+    "description": "Heading over the partner preset used for modulation hopping."
+  },
+  "subghzRxSound": "Звук",
+  "@subghzRxSound": {
+    "description": "Toggle that sends the demodulated signal to the Flipper speaker."
+  },
+  "subghzRxSoundHint": "Выводит демодулированный сигнал на динамик Flipper.",
+  "@subghzRxSoundHint": {
+    "description": "Explanation under the sound toggle."
+  },
+  "subghzRxAutosave": "Автосохранение сигналов",
+  "@subghzRxAutosave": {
+    "description": "Toggle that writes each new signal to the Flipper."
+  },
+  "subghzRxAutosaveHint": "Записывает каждый новый сигнал в /ext/subghz.",
+  "@subghzRxAutosaveHint": {
+    "description": "Explanation under the autosave toggle."
+  },
+  "subghzRxIgnore": "Игнорировать",
+  "@subghzRxIgnore": {
+    "description": "Heading over the protocol classes the receiver should drop."
+  },
+  "subghzRxIgnoreReversRb2": "Revers RB2",
+  "@subghzRxIgnoreReversRb2": {
+    "description": "Protocol class that can be ignored."
+  },
+  "subghzRxIgnoreAlarms": "Сигнализации",
+  "@subghzRxIgnoreAlarms": {
+    "description": "Protocol class that can be ignored."
+  },
+  "subghzRxIgnoreSensors": "Датчики",
+  "@subghzRxIgnoreSensors": {
+    "description": "Protocol class that can be ignored."
+  },
+  "subghzRxIgnorePrinceton": "Princeton",
+  "@subghzRxIgnorePrinceton": {
+    "description": "Protocol class that can be ignored."
+  },
+  "subghzRxIgnoreNiceFlorS": "Nice Flor-S",
+  "@subghzRxIgnoreNiceFlorS": {
+    "description": "Protocol class that can be ignored."
+  },
+  "subghzRxResetDefaults": "Сбросить настройки",
+  "@subghzRxResetDefaults": {
+    "description": "Button that returns the receiver settings to their defaults."
+  },
+  "subghzRxThreshold": "Скрывать < {value} дБм",
+  "@subghzRxThreshold": {
+    "description": "Label on the waveform for the weakest signal that still gets listed.",
+    "placeholders": {
+      "value": {
+        "type": "int"
+      }
+    }
+  },
+  "subghzRxThresholdHint": "Сигналы слабее этого порога не попадают в список. Перетащите красную линию, чтобы изменить.",
+  "@subghzRxThresholdHint": {
+    "description": "Explains the signal strength filter."
+  },
+  "subghzRxTapToChange": "Нажмите, чтобы изменить",
+  "@subghzRxTapToChange": {
+    "description": "Hint under the quick frequency and modulation controls."
+  },
+  "subghzRxRadioAuto": "Авто",
+  "@subghzRxRadioAuto": {
+    "description": "Radio choice that prefers an external module when one is plugged in."
+  },
+  "subghzRxUsingExternal": "Внешний модуль",
+  "@subghzRxUsingExternal": {
+    "description": "Shown when the session is running on an external module."
+  },
+  "subghzRxThresholdEnable": "Скрывать слабые сигналы",
+  "@subghzRxThresholdEnable": {
+    "description": "Toggle that turns on the signal strength filter and its draggable line."
+  },
+  "subghzRxRetuning": "Перенастройка…",
+  "@subghzRxRetuning": {
+    "description": "Shown while the firmware restarts the receiver on new settings."
+  },
+  "subghzRxPulseZoomHint": "сведите пальцы, чтобы увидеть импульсы",
+  "@subghzRxPulseZoomHint": {
+    "description": "Hint telling the user the burst view zooms into edge detail."
+  },
+  "subghzRxPulseDetail": "детализация импульсов",
+  "@subghzRxPulseDetail": {
+    "description": "Shown when the burst view is zoomed into individual edges."
+  },
+  "toolsPinnedHome": "{name} добавлен на главный экран",
+  "@toolsPinnedHome": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "toolsUnpinnedHome": "{name} убран с главного экрана",
+  "@toolsUnpinnedHome": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
   }
 }

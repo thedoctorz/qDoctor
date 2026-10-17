@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/img/firmware/cfw.png" alt="qUnleashed" width="96" height="96">
+  <img src="assets/img/firmware/cfw.png" alt="DoctorMobile" width="96" height="96">
 </p>
 
 <p align="center">
@@ -10,14 +10,13 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2FDarkFlippers%2FqUnleashed%2Fmain%2Fpubspec.yaml&query=%24.version&label=version&color=4C8DFF">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.12.1-4C8DFF">
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-Multiplatform-02569B?logo=flutter&logoColor=white">
-  <img alt="Dart" src="https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2FDarkFlippers%2FqUnleashed%2Fmain%2Fpubspec.yaml&query=%24.environment.sdk&label=Dart%20SDK&color=0175C2&logo=dart">
+  <img alt="Dart" src="https://img.shields.io/badge/Dart_SDK-%5E3.11.1-0175C2?logo=dart">
   <img alt="Platforms" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20macOS%20%7C%20Windows%20%7C%20Linux-blue">
-  <img alt="License" src="https://img.shields.io/github/license/DarkFlippers/qUnleashed">
 </p>
 
-`qUnleashed` is a Flutter companion app for **Flipper Zero**, written from scratch as an alternative to **[Flipper Android App](https://github.com/flipperdevices/Flipper-Android-App.git)** and tailored for custom firmware, first of all **[Unleashed firmware](https://github.com/DarkFlippers/unleashed-firmware.git)** by **[DarkFlippers](https://github.com/DarkFlippers)**. The app is optimized around Unleashed-specific workflows: tracking firmware releases, reading changelogs, downloading updates and installing them directly from the app, while also reworking and extending parts of the original Flipper app experience.
+`DoctorMobile` is a Flutter companion app for **Flipper Zero**, based on [qUnleashed](https://github.com/DarkFlippers/qUnleashed) and tailored for custom firmware, first of all **[Unleashed firmware](https://github.com/DarkFlippers/unleashed-firmware.git)** by **[DarkFlippers](https://github.com/DarkFlippers)**. The app is optimized around Unleashed-specific workflows: tracking firmware releases, reading changelogs, downloading updates and installing them directly from the app, while also reworking and extending parts of the original Flipper app experience.
 
 [![English Telegram Chat](https://img.shields.io/endpoint?color=neon&style=flat&url=https%3A%2F%2Ftg.sumanjay.workers.dev%2Fflipperzero_unofficial)](https://t.me/flipperzero_unofficial)
 [![Russian Telegram Chat](https://img.shields.io/endpoint?color=neon&style=flat&url=https%3A%2F%2Ftg.sumanjay.workers.dev%2Fflipperzero_unofficial_ru)](https://t.me/flipperzero_unofficial_ru)
@@ -46,18 +45,18 @@ app; the other three are this project's build configuration.
 
 ## Features
 
-qUnleashed keeps the familiar companion-app workflows from the original Flipper Android App and extends them for custom firmware: USB support on mobile **and** desktop, firmware repair from DFU mode, phone GPS/internet sharing, a stronger local archive and a bigger toolbox.
+DoctorMobile keeps the familiar companion-app workflows from the original Flipper Android App and extends them for custom firmware: USB support on mobile **and** desktop, firmware repair from DFU mode, phone GPS/internet sharing, a stronger local archive and a bigger toolbox.
 
 ### Connection
 
-- **BLE and USB on every platform that allows it.** qUnleashed connects to Flipper Zero over BLE on all supported platforms, and over a USB serial cable on **Android, Windows, macOS and Linux** (iOS is BLE-only — Apple does not expose USB serial to apps). Both transports drive the same app surface: device info, archive sync, file manager, apps, remote control and CLI.
+- **BLE and USB on every platform that allows it.** DoctorMobile connects to Flipper Zero over BLE on all supported platforms, and over a USB serial cable on **Android, Windows, macOS and Linux** (iOS is BLE-only — Apple does not expose USB serial to apps). Both transports drive the same app surface: device info, archive sync, file manager, apps, remote control and CLI.
 - **Multiple devices.** The app remembers known Flippers, keeps warm sessions for them, switches between devices instantly and reconnects automatically (a plugged-in USB device takes priority over the last BLE one).
 - **Reliable background link.** On Android a foreground service keeps the BLE connection alive while the app is in the background.
 
 ### Firmware
 
 - **Updater.** Firmware-centric for Unleashed: release/dev channel tracking with changelogs, downloads and in-app install, including Unleashed variants (base, extra apps, compact). Official firmware channels are supported as well.
-- **Repair from DFU mode.** If the firmware is broken, qUnleashed can fully re-flash the device over USB in DFU/recovery mode — core firmware, radio stack and FUS handling — mirroring qFlipper's Full Repair flow.
+- **Repair from DFU mode.** If the firmware is broken, DoctorMobile can fully re-flash the device over USB in DFU/recovery mode — core firmware, radio stack and FUS handling — mirroring qFlipper's Full Repair flow.
 - **Release notifications.** Optional push notifications for new Unleashed and official firmware releases, with a separate opt-in for dev-channel builds.
 
 ### Device
@@ -89,23 +88,21 @@ qUnleashed keeps the familiar companion-app workflows from the original Flipper 
 
 ## Translations
 
-The app is translated on Crowdin. **Do not edit `translations/app_*.arb` by hand** — English is the only exception, because it is the source every other language is translated from.
+Strings live in `translations/app_*.arb`. English (`app_en.arb`) is the source; other locale files are edited in this repository.
 
-Crowdin exports each language file whole, so an edit made here is not merged with the next sync, it is reverted by it. That has already cost one manual repair of the Russian translation.
+- **To add or change an English string**, edit `translations/app_en.arb` and update the other locale files.
+- **To correct a translation**, edit that locale's ARB file.
+- **To add a language**, add `translations/app_<code>.arb` and put the language's own name in `_localeNames` (`lib/services/localization/controller.dart`) — without it the picker lists the language by its code rather than as `Deutsch`.
 
-- **To correct or add a translation**, work in Crowdin. It reaches this repository automatically, in a pull request opened by the sync.
-- **To add or change an English string**, edit `translations/app_en.arb`. It is uploaded to Crowdin when the change lands on `main`, and translators see it from there.
-- **To have a new language enabled**, open an issue asking for it. Enabling a language is done in Crowdin; once it has translations, the sync adds `translations/app_<code>.arb` on its own and the app offers the locale. The repository needs nothing further: the picker reads the language's own name from `languageName`, which a translator writes in Crowdin like any other string. A language that skips it is listed by its code, and `translation_completeness_test` says so.
-
-A CI check enforces all of this, so a pull request that edits a translated file fails rather than being merged and quietly undone.
+The Google Play listing is the same: edit the copies under `fastlane/metadata/android/<locale>/`.
 
 [`docs/translating.md`](docs/translating.md) is the translator's half of this: placeholders and plural forms, the terms that stay in Latin script, and `languageName`, which is the one string whose translation is the name of the translator's own language. Point a new translator at that rather than at this section.
 
 ### Writing strings
 
-- Keep product names untranslated: **qUnleashed**, **Flipper**, **Flipper Zero**, and protocol names such as Sub-GHz, NFC, RFID, iButton.
-- Give every new key an `@key` description saying where it appears and, for a bare word, whether it is a verb or a noun. Translators see only the string and that description.
-- Name placeholders for what they hold (`{fileName}`, not `{arg0}`); the name is shown to translators.
+- Keep product names untranslated: **DoctorMobile**, **Flipper**, **Flipper Zero**, and protocol names such as Sub-GHz, NFC, RFID, iButton.
+- Give every new key an `@key` description saying where it appears and, for a bare word, whether it is a verb or a noun.
+- Name placeholders for what they hold (`{fileName}`, not `{arg0}`).
 
 ## Support ApertureFox projects
 <p align="left">

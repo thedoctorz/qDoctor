@@ -234,9 +234,6 @@ class _MappingRow extends StatelessWidget {
 }
 
 // Glyphs stay out of the translated strings. Concatenating one onto an ARB
-// value puts it outside what Crowdin sees, so a locale can neither reorder it
-// nor drop it - and for the Flipper buttons the app already ships the real
-// icons the remote itself uses.
 
 String _inputLabel(BuildContext context, MediaRemoteInput input) =>
     switch (input) {

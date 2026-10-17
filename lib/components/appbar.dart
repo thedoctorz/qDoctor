@@ -5,13 +5,11 @@ import 'package:flutter/material.dart';
 
 import '../services/localization/l10n.dart';
 import '../theme/theme.dart';
-import 'sensitive_surface.dart';
 
 class QPageAppBar extends StatelessWidget implements PreferredSizeWidget {
   const QPageAppBar({
     super.key,
     required this.title,
-    required this.client,
     this.leading,
     this.actions,
     this.backgroundColor,
@@ -24,15 +22,6 @@ class QPageAppBar extends StatelessWidget implements PreferredSizeWidget {
   });
 
   final String title;
-
-  /// The device whose name and link the subtitle shows.
-  ///
-  /// Required since ADR 0011 put `DeviceScope` above the Navigator: every one
-  /// of the sixteen pages that build one of these is inside it now, so each
-  /// has a client to pass. It was optional, with the global as a fallback,
-  /// for exactly as long as that was not true.
-  final FlipperClient client;
-
   final Widget? leading;
   final List<Widget>? actions;
   final Color? backgroundColor;
@@ -44,13 +33,6 @@ class QPageAppBar extends StatelessWidget implements PreferredSizeWidget {
   final double elevation;
 
   static const double toolbarHeight = 68;
-
-  /// What a bar with no [bottom] prefers.
-  ///
-  /// For the `PreferredSizeWidget`s that wrap one of these - `Scaffold.appBar`
-  /// wants the size before the bar is built, so a wrapper has to answer for
-  /// it, and the height should not be restated per feature.
-  static const Size preferredSizeWithoutBottom = Size.fromHeight(toolbarHeight);
 
   @override
   Size get preferredSize =>
@@ -77,7 +59,6 @@ class QPageAppBar extends StatelessWidget implements PreferredSizeWidget {
       actions: actions,
       bottom: bottom,
       title: _PageTitle(
-        client: client,
         title: title,
         subtitle: subtitle,
         showDeviceStatus: showDeviceStatus,
@@ -89,14 +70,12 @@ class QPageAppBar extends StatelessWidget implements PreferredSizeWidget {
 
 class _PageTitle extends StatefulWidget {
   const _PageTitle({
-    required this.client,
     required this.title,
     required this.subtitle,
     required this.showDeviceStatus,
     required this.foregroundColor,
   });
 
-  final FlipperClient client;
   final String title;
   final String? subtitle;
   final bool showDeviceStatus;
@@ -107,6 +86,7 @@ class _PageTitle extends StatefulWidget {
 }
 
 class _PageTitleState extends State<_PageTitle> {
+  final FlipperClient _client = FlipperOneClient().get();
   StreamSubscription<FlipperConnectionState>? _connectionSubscription;
   StreamSubscription<Map<String, String>>? _deviceInfoSubscription;
   FlipperDevice? _device;
@@ -116,42 +96,11 @@ class _PageTitleState extends State<_PageTitle> {
   @override
   void initState() {
     super.initState();
-    _watch();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PageTitle old) {
-    super.didUpdateWidget(old);
-    // A subscription belongs to the client it was opened on. Nothing swaps
-    // one today - the app has a single client - but the parameter exists so a
-    // test can, and a stale subscription would be the same defect either way.
-    if (old.client != widget.client ||
-        old.showDeviceStatus != widget.showDeviceStatus ||
-        (old.subtitle == null) != (widget.subtitle == null)) {
-      _unwatch();
-      _watch();
-    }
-  }
-
-  void _unwatch() {
-    _connectionSubscription?.cancel();
-    _connectionSubscription = null;
-    _deviceInfoSubscription?.cancel();
-    _deviceInfoSubscription = null;
-  }
-
-  /// Reads the link once, and follows it only where the subtitle shows it.
-  ///
-  /// The condition is load-bearing: sixteen pages build one of these, and a
-  /// title that subscribed regardless would put sixteen listeners on the
-  /// device's streams for subtitles that never render a word of it.
-  void _watch() {
-    final client = widget.client;
-    _device = client.connectedDevice;
-    _connected = client.isConnected;
-    _hardwareName = client.getName();
+    _device = _client.connectedDevice;
+    _connected = _client.isConnected;
+    _hardwareName = _client.getName();
     if (widget.showDeviceStatus && widget.subtitle == null) {
-      _connectionSubscription = client.connectionStream.listen((state) {
+      _connectionSubscription = _client.connectionStream.listen((state) {
         if (!mounted) return;
         setState(() {
           _connected = state.connected;
@@ -161,9 +110,9 @@ class _PageTitleState extends State<_PageTitle> {
           }
         });
       });
-      _deviceInfoSubscription = client.deviceInfoUpdates.listen((patch) {
+      _deviceInfoSubscription = _client.deviceInfoUpdates.listen((patch) {
         if (!mounted) return;
-        final name = client.getName();
+        final name = _client.getName();
         if (name != null && name.isNotEmpty) {
           setState(() => _hardwareName = name);
         }
@@ -173,7 +122,8 @@ class _PageTitleState extends State<_PageTitle> {
 
   @override
   void dispose() {
-    _unwatch();
+    _connectionSubscription?.cancel();
+    _deviceInfoSubscription?.cancel();
     super.dispose();
   }
 
@@ -237,7 +187,7 @@ class _Subtitle extends StatelessWidget {
   }
 }
 
-class _DeviceSubtitle extends StatelessWidget with VisibleSurface {
+class _DeviceSubtitle extends StatelessWidget {
   const _DeviceSubtitle({
     required this.name,
     required this.connected,

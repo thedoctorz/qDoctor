@@ -2,24 +2,7 @@ import 'dart:async';
 
 import 'package:flipperlib/flipperlib.dart' hide DateTime, File;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/session.dart';
-
-/// The one link this fake stands for: requests made under it reach the same
-/// client, and it is alive exactly while that client is connected.
-class _FakeBinding implements FlipperSessionBinding {
-  _FakeBinding(this._client);
-
-  final _PauseFakeClient _client;
-
-  @override
-  FlipperDevice? get device => null;
-
-  @override
-  bool get isAlive => _client.isConnected;
-
-  @override
-  T run<T>(T Function() body) => body();
-}
+import 'package:doctormobile/pages/tools/remote/desktop/session.dart';
 
 class _PauseFakeClient implements FlipperClient {
   final broadcast = StreamController<Main>.broadcast();
@@ -34,9 +17,6 @@ class _PauseFakeClient implements FlipperClient {
 
   @override
   bool get isConnected => connected;
-
-  @override
-  FlipperSessionBinding bindCurrentSession() => _FakeBinding(this);
 
   @override
   Stream<Main> get broadcastStream => broadcast.stream;
@@ -98,7 +78,7 @@ void main() {
   });
 
   test(
-    'reconnect while paused restores input without restarting the stream',
+    'reconnect while paused restores input but not the visual connected flag',
     () async {
       final client = _PauseFakeClient()..connected = true;
       final session = RemoteSession(client: client);
@@ -114,12 +94,18 @@ void main() {
       client.connection.add(_link(connected: false));
       await Future<void>.delayed(Duration.zero);
       expect(session.inputAvailable, isFalse);
+      expect(session.isDisconnected, isTrue);
 
       client.connected = true;
       client.connection.add(_link(connected: true));
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
       expect(session.inputAvailable, isTrue);
+      expect(
+        session.isDisconnected,
+        isTrue,
+        reason: 'an RPC reconnect is not evidence that framebuffer data flows',
+      );
       expect(
         client.startStreamCalls,
         1,
@@ -129,6 +115,11 @@ void main() {
       await session.resumeVisuals();
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(client.startStreamCalls, 2);
+      expect(session.isDisconnected, isTrue);
+
+      client.broadcast.add(Main(guiScreenFrame: ScreenFrame()));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(session.isDisconnected, isFalse);
     },
   );
 

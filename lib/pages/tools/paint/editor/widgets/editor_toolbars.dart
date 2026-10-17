@@ -8,12 +8,11 @@ import 'package:flutter/material.dart';
 import '../../../../../theme/colors/display.dart';
 import '../../../../../theme/theme.dart';
 
-import 'package:qunleashed/components/appbar.dart';
+import 'package:doctormobile/components/appbar.dart';
 
 import '../../constants.dart';
 import '../controller.dart';
 import 'editor_widgets.dart';
-import '../../../../devices/device_scope.dart';
 
 class EditorAppBar extends StatelessWidget implements PreferredSizeWidget {
   const EditorAppBar({
@@ -32,12 +31,11 @@ class EditorAppBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback onImport;
 
   @override
-  Size get preferredSize => QPageAppBar.preferredSizeWithoutBottom;
+  Size get preferredSize => const Size.fromHeight(QPageAppBar.toolbarHeight);
 
   @override
   Widget build(BuildContext context) {
     return QPageAppBar(
-      client: DeviceScope.of(context).client,
       title: context.l10n.paintTitle,
       leading: IconButton(
         onPressed: onClose,

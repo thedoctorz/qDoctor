@@ -1,9 +1,10 @@
 import 'dart:ffi';
+import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 
-import '../../../services/native.dart';
 import 'mfkey32_models.dart';
+import 'mifare_native.dart';
 
 abstract class MfKey32Recoverer {
   Future<BigInt?> bruteforceKey(MfKey32Nonce nonce);
@@ -45,7 +46,7 @@ class NativeMfKey32Recoverer implements MfKey32Recoverer {
       nonce.nr1,
       nonce.ar1,
     );
-    return spawnAttackIsolate(_recoverInIsolate, payload);
+    return Isolate.run(() => _recoverInIsolate(payload));
   }
 
   static BigInt? _recoverInIsolate(_RecoverPayload p) {
@@ -70,12 +71,10 @@ class NativeMfKey32Recoverer implements MfKey32Recoverer {
   }
 
   static _RecoverDart _loadRecover() {
-    return lookupNativeFunction(
-      () => openMifareNativeLibrary()
-          .lookupFunction<_RecoverNative, _RecoverDart>(
-            'qunleashed_mfkey32_recover_key',
-          ),
-    );
+    return openMifareNativeLibrary()
+        .lookupFunction<_RecoverNative, _RecoverDart>(
+          'qunleashed_mfkey32_recover_key',
+        );
   }
 }
 

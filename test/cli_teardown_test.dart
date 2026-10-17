@@ -4,15 +4,10 @@ import 'dart:typed_data';
 import 'package:flipperlib/flipperlib.dart' hide DateTime, File;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/remote/cli/page.dart';
-import 'package:qunleashed/services/connection/link_service.dart';
-import 'package:qunleashed/theme/theme.dart';
+import 'package:doctormobile/pages/tools/remote/cli/page.dart';
+import 'package:doctormobile/services/logging.dart';
+import 'package:doctormobile/theme/theme.dart';
 import 'package:xterm/xterm.dart';
-
-import 'kept_lines.dart';
-import 'quiet_log.dart';
-
-import 'quiet_device_title.dart';
 
 class _FakeDiscovered implements DiscoveredDevice {
   _FakeDiscovered(this.transport);
@@ -48,16 +43,17 @@ enum _WriteFailure {
   escapeInMessage,
 }
 
-class _FakeClient with QuietDeviceTitle implements FlipperClient {
-  _FakeClient() {
-    _current = _device(FlipperLink.usb);
+class _FakeClient implements FlipperClient {
+  _FakeClient({this.link = FlipperLink.ble}) {
+    _current = _device(link);
   }
 
+  final FlipperLink link;
   final text = StreamController<String>.broadcast();
   final connection = StreamController<FlipperConnectionState>.broadcast();
 
   _WriteFailure writeFailure = _WriteFailure.none;
-  bool closeRejects = false;
+  bool enterRpcModeRejects = false;
 
   /// Holds a write open, so a test can see what happens while one is still in
   /// flight. Desktop USB waits on a completer with no timeout of its own, so
@@ -65,37 +61,43 @@ class _FakeClient with QuietDeviceTitle implements FlipperClient {
   Completer<void>? heldWrite;
 
   int writeCalls = 0;
+  int enterRpcModeCalls = 0;
 
-  /// Every channel the page opened, in order. A channel is bound to the session
-  /// it was opened on, so which one was closed is what tells one page's
-  /// teardown from the next page's session.
-  final List<_FakeChannel> channels = [];
-
-  int get closeCalls => channels.fold(0, (sum, c) => sum + c.closeCalls);
+  /// What dispose did, in order. cliExclusive has to be cleared before the
+  /// RPC switch — switchToRpcMode refuses outright while it is set — and a
+  /// fake that only counted calls could not tell.
+  final List<String> events = [];
 
   /// Lets a test count what the terminal drew, where `contains` cannot tell
   /// one notice from fifteen.
   static int occurrences(String haystack, String needle) =>
       needle.allMatches(haystack).length;
 
-  late FlipperDevice _current;
+  @override
+  Stream<String> get textStream => text.stream;
+
+  @override
+  Stream<FlipperConnectionState> get connectionStream => connection.stream;
+
+  /// One instance for the life of a session, as the real client does -
+  /// FlipperSession.device is final and connectedDevice returns it, so
+  /// identity is what tells one session from the next.
+  FlipperDevice _current = _device(FlipperLink.usb);
 
   @override
   FlipperDevice? get connectedDevice => _current;
 
-  /// Stands in for a reconnect: the next openCli lands on a fresh session
-  /// carrying a fresh device.
-  void startNewSession() => _current = _device(FlipperLink.usb);
+  /// Stands in for a reconnect: connect() builds a fresh session carrying a
+  /// fresh device.
+  void startNewSession() => _current = _device(link);
 
   @override
-  Future<FlipperCliChannel> openCli(FlipperDevice device) {
-    final channel = _FakeChannel(this, device);
-    channels.add(channel);
-    return Future<FlipperCliChannel>.value(channel);
-  }
+  set cliExclusive(bool value) => events.add('cliExclusive=$value');
 
-  Future<void> _write() {
+  @override
+  Future<void> writeCliBytes(Uint8List bytes) {
     writeCalls += 1;
+    events.add('write');
     final held = heldWrite;
     if (held != null) return held.future;
     switch (writeFailure) {
@@ -105,7 +107,7 @@ class _FakeClient with QuietDeviceTitle implements FlipperClient {
         return Future<void>.error(StateError('transport is gone'));
       case _WriteFailure.escapeInMessage:
         return Future<void>.error(
-          StateError('write failed \x1b[2J\x1b[H and then some'),
+          StateError('write failed [2J[H and then some'),
         );
       case _WriteFailure.none:
         return Future<void>.value();
@@ -113,35 +115,20 @@ class _FakeClient with QuietDeviceTitle implements FlipperClient {
   }
 
   @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class _FakeChannel implements FlipperCliChannel {
-  _FakeChannel(this._client, this.device);
-
-  final _FakeClient _client;
-
-  @override
-  final FlipperDevice device;
-
-  int closeCalls = 0;
-
-  @override
-  Stream<String> get text => _client.text.stream;
-
-  @override
-  Stream<FlipperConnectionState> get connection => _client.connection.stream;
-
-  @override
-  Future<void> write(Uint8List bytes) => _client._write();
-
-  @override
-  Future<void> close({bool backToRpc = true}) {
-    closeCalls += 1;
-    return _client.closeRejects
+  Future<void> enterRpcMode() {
+    enterRpcModeCalls += 1;
+    events.add('enterRpcMode');
+    return enterRpcModeRejects
         ? Future<void>.error(StateError('rpc switch failed'))
         : Future<void>.value();
   }
+
+  @override
+  Future<void> disconnect() async {}
+
+  @override
+  Future<FlipperDevice> connect(FlipperDevice device, {bool autoRpc = true}) =>
+      Future<FlipperDevice>.value(device);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -180,20 +167,33 @@ Widget _wrap(Widget child) => MaterialApp(
   home: child,
 );
 
-// A fourth copy of `printedAsync` stood here. It is in `quiet_log.dart` now,
-// which is where the other three went; this file calls that one.
-//
-// Why these read the console rather than `keptLines`: what prints follows the
-// build, so an assertion that a line *was* printed fails outright under
-// `--dart-define=QLOG=false` and cannot tell a handler logging at `info` -
-// which a release build compiles away - from one logging at `error`. What is
-// left here is asserting a line is *absent*, where printing is the wider net
-// of the two: a build that prints everything cannot hide a line that a build
-// that prints nothing would.
+/// Silences the console for [body] and hands back what it would have printed.
+///
+/// Restored inline rather than through addTearDown, which flutter_test rejects
+/// as changing a debug variable.
+///
+/// For asserting a failure *was* recorded, read LogService.history instead:
+/// what prints follows the build, so these assertions failed outright under
+/// --dart-define=QLOG=false, and they could not tell a handler logging at info
+/// - which a release build compiles away - from one logging at error. The
+/// history is the surface the log screen reads and the one a bug report
+/// carries. What is left here is asserting a line is *absent*, where printing
+/// is the wider net of the two.
+Future<List<String>> recordingLogs(Future<void> Function() body) async {
+  final lines = <String>[];
+  final previous = debugPrint;
+  debugPrint = (String? message, {int? wrapWidth}) {
+    if (message != null) lines.add(message);
+  };
+  try {
+    await body();
+  } finally {
+    debugPrint = previous;
+  }
+  return lines;
+}
 
 void main() {
-  setUp(recordKeptLines);
-
   /// Opens the page, lets the device say [lastOutput], then disposes it.
   ///
   /// An unhandled rejection during dispose fails the test outright, which is
@@ -205,17 +205,14 @@ void main() {
     _FakeClient client, {
     String lastOutput = 'doing something long',
   }) async {
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump();
 
     client.text.add(lastOutput);
     await tester.pump();
 
     await tester.pumpWidget(_wrap(const SizedBox.shrink()));
-    // Past _enterCliReady's own delay, so no timer is left pending.
-    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump(const Duration(milliseconds: 50));
   }
 
   testWidgets('a ctrl-c refused before it is sent does not escape teardown', (
@@ -225,12 +222,12 @@ void main() {
       ..writeFailure = _WriteFailure.throwsSynchronously;
     addTearDown(client.text.close);
 
-    clearKeptLines();
-    await printedAsync(() => openThenDispose(tester, client));
+    LogService.clearHistory();
+    await recordingLogs(() => openThenDispose(tester, client));
 
     expect(client.writeCalls, 1);
     expect(
-      keptLines.where((l) => l.contains('ctrl-c on dispose failed')),
+      LogService.history.where((l) => l.contains('ctrl-c on dispose failed')),
       isNotEmpty,
       reason: 'the handler ran, rather than the failure merely not surfacing',
     );
@@ -246,12 +243,12 @@ void main() {
     final client = _FakeClient()..writeFailure = _WriteFailure.rejects;
     addTearDown(client.text.close);
 
-    clearKeptLines();
-    await printedAsync(() => openThenDispose(tester, client));
+    LogService.clearHistory();
+    await recordingLogs(() => openThenDispose(tester, client));
 
     expect(client.writeCalls, 1);
     expect(
-      keptLines.where((l) => l.contains('ctrl-c on dispose failed')),
+      LogService.history.where((l) => l.contains('ctrl-c on dispose failed')),
       isNotEmpty,
     );
   });
@@ -267,31 +264,56 @@ void main() {
     expect(client.writeCalls, 0);
   });
 
-  // The other half of teardown: handing the session back to RPC can fail
-  // too, and dispose has nowhere to report it but the log.
+  // The other half of the fix, which the tests above cannot reach: dispose
+  // only returns to RPC mode for a non-BLE device.
   testWidgets('a failed return to RPC mode does not escape teardown', (
     tester,
   ) async {
-    final client = _FakeClient()..closeRejects = true;
+    final client = _FakeClient(link: FlipperLink.usb)
+      ..enterRpcModeRejects = true;
     addTearDown(client.text.close);
 
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     // Long enough for _enterCliReady's own delay to elapse, so no timer is
     // left pending when the page goes away.
     await tester.pump(const Duration(milliseconds: 600));
 
-    clearKeptLines();
-    await printedAsync(() async {
-      await tester.pumpWidget(_wrap(const SizedBox.shrink()));
-      await tester.pump(const Duration(milliseconds: 50));
-    });
+    await tester.pumpWidget(_wrap(const SizedBox.shrink()));
+    await tester.pump(const Duration(milliseconds: 50));
 
-    expect(client.closeCalls, 1);
+    expect(client.enterRpcModeCalls, 1);
+  });
+
+  testWidgets('a BLE device is left alone rather than pushed back to RPC', (
+    tester,
+  ) async {
+    final client = _FakeClient();
+    addTearDown(client.text.close);
+
+    await openThenDispose(tester, client);
+
+    expect(client.enterRpcModeCalls, 0);
+  });
+
+  // The ordering dispose() documents as load-bearing: switchToRpcMode returns
+  // an error while cliExclusive is still set, so clearing it has to come
+  // first. Counting calls could not see this; deleting the assignment
+  // altogether left every other test green.
+  testWidgets('cli mode is released before the switch back to RPC', (
+    tester,
+  ) async {
+    final client = _FakeClient(link: FlipperLink.usb);
+    addTearDown(client.text.close);
+
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpWidget(_wrap(const SizedBox.shrink()));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(client.events, contains('cliExclusive=false'));
     expect(
-      keptLines.where((l) => l.contains('leaving cli mode failed')),
-      isNotEmpty,
+      client.events.indexOf('cliExclusive=false'),
+      lessThan(client.events.indexOf('enterRpcMode')),
     );
   });
 
@@ -301,24 +323,25 @@ void main() {
   testWidgets('the ctrl-c button survives a session that is already gone', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
 
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
 
     client.writeFailure = _WriteFailure.throwsSynchronously;
     final before = client.writeCalls;
-    clearKeptLines();
-    await printedAsync(() async {
+    LogService.clearHistory();
+    await recordingLogs(() async {
       await tester.tap(find.byIcon(Icons.stop_circle_outlined));
       await tester.pump();
     });
 
     expect(client.writeCalls, before + 1, reason: 'the button is live');
-    expect(keptLines.where((l) => l.contains('ctrl-c failed')), isNotEmpty);
+    expect(
+      LogService.history.where((l) => l.contains('ctrl-c failed')),
+      isNotEmpty,
+    );
   });
   // #80. A keystroke that never reached the device drew nothing at all, and
   // the only other evidence was a log line - since #89 kept in a buffer, but
@@ -327,15 +350,13 @@ void main() {
   testWidgets('a keystroke that cannot be delivered says so in the terminal', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
 
     client.writeFailure = _WriteFailure.rejects;
-    await printedAsync(() async {
+    await recordingLogs(() async {
       _terminalOf(tester).textInput('ls');
       await tester.pump();
     });
@@ -348,15 +369,13 @@ void main() {
   testWidgets('a keystroke refused before it is sent says so too', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
 
     client.writeFailure = _WriteFailure.throwsSynchronously;
-    await printedAsync(() async {
+    await recordingLogs(() async {
       _terminalOf(tester).textInput('ls');
       await tester.pump();
     });
@@ -370,15 +389,13 @@ void main() {
   // failure would be dead for good, with nothing on screen saying how to
   // revive it. A session that has really gone raises a disconnect instead.
   testWidgets('a failed write leaves a still-live page usable', (tester) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
 
     client.writeFailure = _WriteFailure.rejects;
-    await printedAsync(() async {
+    await recordingLogs(() async {
       _terminalOf(tester).textInput('ls');
       await tester.pump();
     });
@@ -397,15 +414,13 @@ void main() {
   testWidgets('a burst of failed writes draws one line, not one each', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
 
     client.writeFailure = _WriteFailure.rejects;
-    await printedAsync(() async {
+    await recordingLogs(() async {
       final terminal = _terminalOf(tester);
       terminal.textInput('l');
       terminal.textInput('s');
@@ -419,14 +434,12 @@ void main() {
   testWidgets('the device answering makes the next failure news again', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
 
-    await printedAsync(() async {
+    await recordingLogs(() async {
       client.writeFailure = _WriteFailure.rejects;
       _terminalOf(tester).textInput('ls');
       await tester.pump();
@@ -447,17 +460,15 @@ void main() {
   testWidgets('an error carrying escape codes cannot drive the terminal', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
     client.text.add('output worth keeping');
     await tester.pump();
 
     client.writeFailure = _WriteFailure.escapeInMessage;
-    await printedAsync(() async {
+    await recordingLogs(() async {
       _terminalOf(tester).textInput('ls');
       await tester.pump();
     });
@@ -471,13 +482,12 @@ void main() {
   testWidgets('the page does not claim ready when the nudge fails', (
     tester,
   ) async {
-    final client = _FakeClient()..writeFailure = _WriteFailure.rejects;
+    final client = _FakeClient(link: FlipperLink.usb)
+      ..writeFailure = _WriteFailure.rejects;
     addTearDown(client.text.close);
 
-    await printedAsync(() async {
-      await tester.pumpWidget(
-        _wrap(CliPage(client: client, links: LinkService.instance)),
-      );
+    await recordingLogs(() async {
+      await tester.pumpWidget(_wrap(CliPage(client: client)));
       await tester.pump(const Duration(milliseconds: 600));
     });
 
@@ -486,12 +496,10 @@ void main() {
   });
 
   testWidgets('the terminal says when the device goes away', (tester) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
     addTearDown(client.connection.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
 
     client.connection.add(
@@ -515,11 +523,9 @@ void main() {
   testWidgets('the interrupt finishes before the switch back to RPC', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
     client.text.add('doing something long');
     await tester.pump();
@@ -530,12 +536,16 @@ void main() {
     await tester.pump();
 
     expect(client.writeCalls, greaterThan(0), reason: 'the interrupt went');
-    expect(client.closeCalls, 0, reason: 'and the close is waiting on it');
+    expect(
+      client.enterRpcModeCalls,
+      0,
+      reason: 'and the switch is waiting on it',
+    );
 
     held.complete();
     await tester.pump();
 
-    expect(client.closeCalls, 1);
+    expect(client.enterRpcModeCalls, 1);
   });
 
   // Sequencing them is only safe because the wait is bounded. Desktop USB
@@ -545,24 +555,22 @@ void main() {
   testWidgets('a write that never finishes does not strand the RPC restore', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
     client.text.add('doing something long');
     await tester.pump();
 
     client.heldWrite = Completer<void>();
-    await printedAsync(() async {
+    await recordingLogs(() async {
       await tester.pumpWidget(_wrap(const SizedBox.shrink()));
       await tester.pump();
-      expect(client.closeCalls, 0);
+      expect(client.enterRpcModeCalls, 0);
       await tester.pump(const Duration(seconds: 3));
     });
 
-    expect(client.closeCalls, 1);
+    expect(client.enterRpcModeCalls, 1);
   });
 
   // The nudge is a second suspension point, and the page can be backed out of
@@ -573,15 +581,13 @@ void main() {
   testWidgets('backing out while the nudge is in flight is not an error', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
     final held = Completer<void>();
     client.heldWrite = held;
 
-    final logs = await printedAsync(() async {
-      await tester.pumpWidget(
-        _wrap(CliPage(client: client, links: LinkService.instance)),
-      );
+    final logs = await recordingLogs(() async {
+      await tester.pumpWidget(_wrap(CliPage(client: client)));
       await tester.pump(const Duration(milliseconds: 600));
       await tester.pumpWidget(_wrap(const SizedBox.shrink()));
       await tester.pump();
@@ -594,37 +600,29 @@ void main() {
     expect(logs.where((l) => l.contains('setState')), isEmpty);
   });
 
-  // Chaining the close behind the interrupt puts up to two seconds between
-  // dispose and the close. A CLI page opened in the meantime has its own
-  // channel on its own session, and the old teardown must close only the one
-  // it opened - never hand the new page's session back to RPC under it.
+  // Chaining the switch behind the interrupt put up to two seconds between
+  // dispose and the switch, and cliExclusive is re-read from whatever session
+  // is active - so a CLI page opened in the meantime would be switched to RPC
+  // mode under itself, and its own nudge would then fail.
   testWidgets('a teardown that outlives its session leaves the next alone', (
     tester,
   ) async {
-    final client = _FakeClient();
+    final client = _FakeClient(link: FlipperLink.usb);
     addTearDown(client.text.close);
-    await tester.pumpWidget(
-      _wrap(CliPage(client: client, links: LinkService.instance)),
-    );
+    await tester.pumpWidget(_wrap(CliPage(client: client)));
     await tester.pump(const Duration(milliseconds: 600));
     client.text.add('doing something long');
     await tester.pump();
 
     client.heldWrite = Completer<void>();
-    await printedAsync(() async {
+    await recordingLogs(() async {
       await tester.pumpWidget(_wrap(const SizedBox.shrink()));
       await tester.pump();
-      client
-        ..heldWrite = null
-        ..startNewSession();
-      await tester.pumpWidget(
-        _wrap(CliPage(client: client, links: LinkService.instance)),
-      );
+      // A new page connects while the old interrupt is still outstanding.
+      client.startNewSession();
       await tester.pump(const Duration(seconds: 3));
     });
 
-    expect(client.channels, hasLength(2));
-    expect(client.channels.first.closeCalls, 1);
-    expect(client.channels.last.closeCalls, 0);
+    expect(client.enterRpcModeCalls, 0);
   });
 }

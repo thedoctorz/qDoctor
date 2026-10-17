@@ -4,11 +4,13 @@ import 'dart:ui' as ui;
 
 import 'package:flipperlib/flipperlib.dart' hide DateTime, File;
 
-import '../../../../theme/colors/display.dart';
 import 'models/models.dart';
 
 const int kFlipperScreenWidth = 128;
 const int kFlipperScreenHeight = 64;
+
+const int kFlipperScreenBg = 0xFFFE8A2C;
+const int kFlipperScreenFg = 0xFF000000;
 
 /// Synchronously unpacks a [ScreenFrame] into raw pixel data.
 /// No GPU or async work - runs immediately on any incoming frame.
@@ -16,9 +18,8 @@ RawFrameData decodeFrameSync(ScreenFrame frame) {
   final pixels = Uint8List(kFlipperScreenWidth * kFlipperScreenHeight * 4);
   final pixelIndices = Uint8List(kFlipperScreenWidth * kFlipperScreenHeight);
   final raw = frame.data;
-  final display = DisplayColors.current;
-  final bg = display.background.toARGB32();
-  final fg = display.foreground.toARGB32();
+  const bg = kFlipperScreenBg;
+  const fg = kFlipperScreenFg;
 
   final orientation = switch (frame.orientation) {
     ScreenOrientation.HORIZONTAL => StreamOrientation.horizontal,

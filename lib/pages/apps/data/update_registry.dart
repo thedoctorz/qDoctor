@@ -59,15 +59,6 @@ class UpdateRegistry extends ChangeNotifier {
   List<AppUpdate> _updates = const [];
   int get count => _updates.length;
 
-  bool _failed = false;
-
-  /// Whether the last check for updates finished.
-  ///
-  /// [count] is zero both when everything is current and when nothing could
-  /// be checked, and the badge renders only above zero - so a failed check
-  /// looks exactly like being up to date. #112.
-  bool get failed => _failed;
-
   AppCard? cardForUid(String uid) => uid.isEmpty ? null : _cardsByUid[uid];
   Set<String> get updatableAliases => _updates.map((u) => u.alias).toSet();
 
@@ -83,28 +74,16 @@ class UpdateRegistry extends ChangeNotifier {
     await refresh();
   }
 
-  /// Resolves the updates as one background task: the installed set it asks the
-  /// catalogue about belongs to one Flipper, so the answer has to come back to
-  /// that same one.
-  Future<void> refresh({bool force = false}) {
-    if (_loading || !isReady) return Future.value();
+  Future<void> refresh({bool force = false}) async {
+    if (_loading || !isReady) return;
     if (catalog.mode.value == CatalogMode.managerOnly) {
       _cardsByUid.clear();
       _updates = const [];
       _loaded = true;
       notifyListeners();
-      return Future.value();
+      return;
     }
-    return client.runTask(
-      FlipperRequestPriority.background,
-      () => _refresh(force: force),
-    );
-  }
-
-  Future<void> _refresh({required bool force}) async {
-    final token = client.deviceToken;
     _loading = true;
-    _failed = false;
     notifyListeners();
     try {
       await catalog.ensureDeviceFilters(required: true);
@@ -112,7 +91,6 @@ class UpdateRegistry extends ChangeNotifier {
         await manifests.refresh(force: true);
       }
       await _awaitManifests();
-      if (token.isStale) return;
 
       final installed = <String, AppManifest>{};
       for (final m in manifests.all) {
@@ -133,7 +111,6 @@ class UpdateRegistry extends ChangeNotifier {
       final cards = catalogUids.isEmpty
           ? const <AppCard>[]
           : await api.fetchAppsByUids(catalogUids);
-      if (token.isStale) return;
       _cardsByUid
         ..clear()
         ..addEntries(
@@ -151,9 +128,9 @@ class UpdateRegistry extends ChangeNotifier {
       );
     } catch (e) {
       // _updates keeps whatever the last successful refresh left: zero on a
-      // cold start, stale afterwards. [failed] is what separates that from
-      // an answer, because the count cannot.
-      _failed = true;
+      // cold start, stale afterwards. The badge in manager/page.dart renders
+      // only when count > 0, so either way a failure looks like being up to
+      // date.
       LogService.warn('[Updates] refresh failed: $e');
     } finally {
       _loading = false;
@@ -215,6 +192,7 @@ class UpdateRegistry extends ChangeNotifier {
         card: card,
         manifest: manifest,
         targetSdk: catalog.targetSdk,
+        apiWindow: catalog.apiMajorWindow,
         ignoreSdkMismatch: _ignoreSdkMismatch,
       );
       if (state != CatalogAppState.update) continue;

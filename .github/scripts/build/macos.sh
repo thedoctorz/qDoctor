@@ -2,12 +2,9 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-APP_NAME="qUnleashed"
-FILE_NAME="qunleashed"
-# The asset version, which carries the channel suffix and build number on a
-# dev build so its filenames differ from the release of the same cycle.
-# Falls back to the numeric name, then to pubspec.
-VERSION_NAME="${QUNLEASHED_ASSET_VERSION:-${QUNLEASHED_VERSION_NAME:-}}"
+APP_NAME="DoctorMobile"
+FILE_NAME="doctormobile"
+VERSION_NAME="${DOCTORMOBILE_VERSION_NAME:-}"
 DIST_DIR="$ROOT_DIR/dist"
 BUILD_APP="$ROOT_DIR/build/macos/Build/Products/Release/$APP_NAME.app"
 BACKGROUND_SOURCE="$ROOT_DIR/assets/img/bg.jpg"
@@ -23,7 +20,7 @@ if [[ -z "$VERSION_NAME" ]]; then
 fi
 
 if [[ -z "$VERSION_NAME" ]]; then
-  echo "App version not found. Set QUNLEASHED_ASSET_VERSION or pubspec.yaml version." >&2
+  echo "App version not found. Set DOCTORMOBILE_VERSION_NAME or pubspec.yaml version." >&2
   exit 1
 fi
 
@@ -54,8 +51,8 @@ mkdir -p "$DIST_DIR"
 echo "Using Flutter: $FLUTTER_BIN"
 echo "Building macOS release..."
 FLUTTER_COMMAND=("$FLUTTER_BIN" build macos --release)
-if [[ -n "${QUNLEASHED_FLUTTER_BUILD_ARGS:-}" ]]; then
-  read -r -a FLUTTER_BUILD_ARGS <<< "$QUNLEASHED_FLUTTER_BUILD_ARGS"
+if [[ -n "${DOCTORMOBILE_FLUTTER_BUILD_ARGS:-}" ]]; then
+  read -r -a FLUTTER_BUILD_ARGS <<< "$DOCTORMOBILE_FLUTTER_BUILD_ARGS"
   FLUTTER_COMMAND+=("${FLUTTER_BUILD_ARGS[@]}")
 fi
 (cd "$ROOT_DIR" && "${FLUTTER_COMMAND[@]}")
@@ -85,6 +82,7 @@ fi
 
 OUT_FILE="$DIST_DIR/${FILE_NAME}_${VERSION_NAME}_macos_${TARGET_ARCH}.dmg"
 VOLUME_NAME="$APP_NAME $VERSION_NAME"
+RELEASES_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-thedoctorz/doctor-mobile}/releases"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/${FILE_NAME}-dmg.XXXXXX")"
 STAGING_DIR="$TMP_DIR/staging"
 MOUNT_DIR="/Volumes/$VOLUME_NAME"
@@ -113,9 +111,9 @@ ln -s /Applications "$STAGING_DIR/Applications"
 sips --setProperty format png --resampleHeightWidth 563 900 "$BACKGROUND_SOURCE" \
   --out "$STAGING_DIR/.background/bg.png" >/dev/null
 
-cat > "$STAGING_DIR/readme.txt" <<'INSTRUCTIONS'
-qUnleashed for macOS
-====================
+cat > "$STAGING_DIR/readme.txt" <<INSTRUCTIONS
+DoctorMobile for macOS
+=====================
 
 This build is NOT signed with an Apple Developer ID and is NOT notarized by
 Apple. macOS quarantines it on download and will refuse to open it, usually
@@ -125,7 +123,7 @@ does not mean the download failed.
 Clearing the quarantine flag is therefore required to run this build. Do it
 only for a DMG you downloaded yourself from the official releases page:
 
-  https://github.com/DarkFlippers/qUnleashed/releases
+  ${RELEASES_URL}
 
 Every release also publishes a SHA256SUMS file. To check this DMG against it,
 put both in the same folder and run:
@@ -135,11 +133,11 @@ put both in the same folder and run:
 That confirms the download arrived intact. It is not a signature, so it says
 nothing about the release itself.
 
-1. Drag qUnleashed.app to the Applications folder.
+1. Drag DoctorMobile.app to the Applications folder.
 2. Open Terminal and run:
 
-   sudo xattr -dr com.apple.quarantine "/Applications/qUnleashed.app"
-   open "/Applications/qUnleashed.app"
+   sudo xattr -dr com.apple.quarantine "/Applications/DoctorMobile.app"
+   open "/Applications/DoctorMobile.app"
 
    Enter your macOS administrator password when prompted. Terminal does not
    display password characters while you type.
@@ -158,12 +156,12 @@ Full Disk Access does not grant administrator or sudo privileges. If your
 account is not an administrator or sudo is restricted by your organization,
 contact the Mac administrator.
 
-The xattr command removes only the quarantine attribute from qUnleashed. It
+The xattr command removes only the quarantine attribute from DoctorMobile. It
 does not disable Gatekeeper or other macOS security protections system-wide.
 
 
-qUnleashed для macOS
-====================
+DoctorMobile для macOS
+======================
 
 Эта сборка НЕ подписана Apple Developer ID и НЕ прошла нотаризацию Apple.
 macOS помещает её в карантин при загрузке и откажется открывать приложение,
@@ -173,7 +171,7 @@ macOS помещает её в карантин при загрузке и от�
 Поэтому для запуска этой сборки необходимо снять атрибут карантина. Делайте
 это только для DMG, который вы сами скачали со страницы официальных релизов:
 
-  https://github.com/DarkFlippers/qUnleashed/releases
+  ${RELEASES_URL}
 
 К каждому релизу также публикуется файл SHA256SUMS. Чтобы сверить с ним этот
 DMG, поместите оба файла в одну папку и выполните:
@@ -183,11 +181,11 @@ DMG, поместите оба файла в одну папку и выполн
 Это подтверждает, что файл скачался без повреждений. Это не подпись, поэтому
 о самом релизе она ничего не говорит.
 
-1. Перетащите qUnleashed.app в папку Applications.
+1. Перетащите DoctorMobile.app в папку Applications.
 2. Запустите Terminal и выполните:
 
-   sudo xattr -dr com.apple.quarantine "/Applications/qUnleashed.app"
-   open "/Applications/qUnleashed.app"
+   sudo xattr -dr com.apple.quarantine "/Applications/DoctorMobile.app"
+   open "/Applications/DoctorMobile.app"
 
    Когда появится запрос, введите пароль администратора macOS. Во время ввода
    пароля Terminal не отображает символы.
@@ -207,7 +205,7 @@ DMG, поместите оба файла в одну папку и выполн
 ваша учетная запись не является администратором или sudo ограничен вашей
 организацией, обратитесь к администратору Mac.
 
-Команда xattr удаляет только атрибут карантина с qUnleashed. Она не отключает
+Команда xattr удаляет только атрибут карантина с DoctorMobile. Она не отключает
 Gatekeeper или другие механизмы безопасности macOS для всей системы.
 INSTRUCTIONS
 
@@ -250,7 +248,7 @@ on run (volumeName)
       end tell
       set background picture of opts to file ".background:bg.png"
 
-      set position of item "qUnleashed.app" to {210, 270}
+      set position of item "DoctorMobile.app" to {210, 270}
       set position of item "Applications" to {690, 270}
       set position of item "readme.txt" to {820, 80}
       close

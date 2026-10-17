@@ -24,10 +24,9 @@ class RemoteWideBody extends StatelessWidget {
     required this.connected,
     required this.gifState,
     required this.gifElapsedMs,
-    required this.justUnlocked,
+    required this.isLocked,
     required this.savingScreenshot,
     required this.onBack,
-    required this.onConnection,
     required this.onCopy,
     required this.onSave,
     required this.onUnlock,
@@ -38,6 +37,7 @@ class RemoteWideBody extends StatelessWidget {
     required this.onHoldBegin,
     required this.onHoldEnd,
     this.onWristRemoteSettings,
+    this.keyboard,
   });
 
   final RemoteLayout layout;
@@ -47,10 +47,9 @@ class RemoteWideBody extends StatelessWidget {
   final bool connected;
   final GifRecordingState gifState;
   final int gifElapsedMs;
-  final bool justUnlocked;
+  final bool isLocked;
   final bool savingScreenshot;
   final VoidCallback onBack;
-  final VoidCallback onConnection;
   final AsyncCallback onCopy;
   final AsyncCallback onSave;
   final AsyncCallback onUnlock;
@@ -61,6 +60,7 @@ class RemoteWideBody extends StatelessWidget {
   final void Function(RemoteButton) onHoldBegin;
   final void Function(RemoteButton) onHoldEnd;
   final VoidCallback? onWristRemoteSettings;
+  final Widget? keyboard;
 
   Widget _ledSlot(RemoteLayout layout, bool connected) {
     final radius =
@@ -125,16 +125,19 @@ class RemoteWideBody extends StatelessWidget {
                       ],
                     ),
                     const Spacer(),
+                    if (keyboard != null) ...[
+                      keyboard!,
+                      const SizedBox(height: 8),
+                    ],
                     Align(
                       alignment: Alignment.centerLeft,
                       child: RemoteActionBar(
                         size: layout.actionsSize,
                         gifState: gifState,
                         gifElapsedMs: gifElapsedMs,
-                        justUnlocked: justUnlocked,
+                        isLocked: isLocked,
                         savingScreenshot: savingScreenshot,
                         onBack: onBack,
-                        onConnection: onConnection,
                         onCopy: onCopy,
                         onSave: onSave,
                         onUnlock: onUnlock,

@@ -1,13 +1,12 @@
-import '../../../services/guarded.dart';
 import '../../../services/localization/l10n.dart';
 
 import 'dart:async';
-import 'dart:io' show HttpClient;
+import 'dart:io' show HttpClient, HttpException, SocketException;
 import 'dart:math' as math;
 
-import 'package:flipperlib/flipperlib.dart' hide DateTime, File;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:applemap/applemap.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/io_client.dart';
@@ -18,25 +17,18 @@ import '../../../theme/theme.dart';
 import '../../../components/notification.dart';
 import 'controller.dart';
 import 'data/settings.dart';
+import 'native/marker_images.dart';
 import '../../../components/navigation.dart';
 import '../../../components/archive/models/pin.dart';
 import '../../../components/filelist/empty_view.dart';
+import '../../../app/nav_bar.dart';
 
 part 'widgets/circle_button.dart';
 part 'widgets/panel.dart';
 part 'widgets/sheet.dart';
 
 class FlipperMapPage extends StatefulWidget {
-  const FlipperMapPage({
-    super.key,
-    required this.client,
-    this.focusPinPath,
-    this.pickLocationFor,
-  });
-
-  /// The Flipper a pin is read from and written back to. Required rather
-  /// than defaulted, for the reason in [FileManagerPage]. ADR 0002.
-  final FlipperClient client;
+  const FlipperMapPage({super.key, this.focusPinPath, this.pickLocationFor});
 
   final String? focusPinPath;
   final MapPickTarget? pickLocationFor;
@@ -64,6 +56,9 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
   String? _noticeKey;
   QNotificationHandle? _notice;
 
+  static const Duration _tileGracePeriod = Duration(seconds: 6);
+  final Stopwatch _openedAt = Stopwatch();
+
   bool _panelOpen = true;
 
   // TileLayer builds a NetworkTileProvider — and with it a fresh HTTP client
@@ -78,13 +73,19 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
   MapPickTarget? _pickTarget;
   late final bool _openedInPickMode;
 
+  AppleMapController? _systemMap;
+
+  AppleMapCamera? _systemCamera;
+  final MapMarkerImages _markers = MapMarkerImages.instance;
+  bool _markerWorkPending = false;
+
   @override
   void initState() {
     super.initState();
-    _controller = MapToolController(client: widget.client)
-      ..addListener(_onChanged);
+    _openedAt.start();
+    _controller = MapToolController()..addListener(_onChanged);
     _settings.addListener(_onChanged);
-    unawaited(guarded('[Map] load settings', _settings.load));
+    unawaited(_settings.load());
     _openedInPickMode = widget.pickLocationFor != null;
     if (_openedInPickMode) {
       _mode = _MapMode.pick;
@@ -106,6 +107,11 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
   void _onChanged() {
     if (!mounted) return;
     _maybeSelectInitialPin();
+    if (_settings.useSystemMap == (_systemMap == null) && _mapReady) {
+      _systemMap = null;
+      _systemCamera = null;
+      _mapReady = !_settings.useSystemMap;
+    }
     setState(() {});
     _maybeAutoCenter();
     _maybeFollowUser();
@@ -118,7 +124,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       final target = _pickTarget;
       if (target?.initialLatitude != null && target?.initialLongitude != null) {
         _initialCentered = true;
-        _mapController.move(
+        _moveCamera(
           LatLng(target!.initialLatitude!, target.initialLongitude!),
           17,
         );
@@ -127,7 +133,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       final p = _controller.userPosition;
       if (p != null) {
         _initialCentered = true;
-        _mapController.move(LatLng(p.latitude, p.longitude), 17);
+        _moveCamera(LatLng(p.latitude, p.longitude), 17);
       }
       return;
     }
@@ -137,7 +143,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       if (_initialCentered) return;
       _initialCentered = true;
       _centeredOnPinsOnly = false;
-      _mapController.move(LatLng(selected.latitude, selected.longitude), 17);
+      _moveCamera(LatLng(selected.latitude, selected.longitude), 17);
       return;
     }
 
@@ -151,7 +157,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       if (_initialCentered && !(_centeredOnPinsOnly && !_userMovedMap)) return;
       _initialCentered = true;
       _centeredOnPinsOnly = false;
-      _mapController.move(LatLng(p.latitude, p.longitude), 16);
+      _moveCamera(LatLng(p.latitude, p.longitude), 16);
       return;
     }
 
@@ -160,7 +166,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       _initialCentered = true;
       _centeredOnPinsOnly = true;
       final first = _controller.pins.first;
-      _mapController.move(LatLng(first.latitude, first.longitude), 14);
+      _moveCamera(LatLng(first.latitude, first.longitude), 14);
     }
   }
 
@@ -173,7 +179,37 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
     }
     final target = _activeTarget();
     if (target == null) return;
-    _mapController.move(target, _mapController.camera.zoom);
+    _moveCamera(target, _cameraZoom);
+  }
+
+  void _moveCamera(LatLng target, double zoom) {
+    if (!_mapReady) return;
+    final system = _systemMap;
+    if (system != null) {
+      _systemCamera = AppleMapCamera(
+        latitude: target.latitude,
+        longitude: target.longitude,
+        zoom: zoom,
+      );
+      unawaited(system.moveCamera(_systemCamera!));
+      return;
+    }
+    _mapController.move(target, zoom);
+  }
+
+  LatLng get _cameraCenter {
+    final camera = _systemCamera;
+    if (_systemMap != null && camera != null) {
+      return LatLng(camera.latitude, camera.longitude);
+    }
+    if (_systemMap != null) return _initialCenter();
+    return _mapController.camera.center;
+  }
+
+  double get _cameraZoom {
+    final camera = _systemCamera;
+    if (_systemMap != null) return camera?.zoom ?? _initialZoom();
+    return _mapController.camera.zoom;
   }
 
   LatLng? _activeTarget() {
@@ -237,7 +273,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       _controller.requestLocation();
       return;
     }
-    if (_mapReady) _mapController.move(target, 17);
+    _moveCamera(target, 17);
   }
 
   void _selectPin(MapPin pin) {
@@ -245,7 +281,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
     setState(() {
       _selectedPin = pin;
     });
-    if (_mapReady) _mapController.move(LatLng(pin.latitude, pin.longitude), 17);
+    _moveCamera(LatLng(pin.latitude, pin.longitude), 17);
   }
 
   void _enterEditModeFor(MapPin pin) {
@@ -260,9 +296,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       );
       _selectedPin = null;
     });
-    if (_mapReady) {
-      _mapController.move(LatLng(pin.latitude, pin.longitude), 17);
-    }
+    _moveCamera(LatLng(pin.latitude, pin.longitude), 17);
   }
 
   void _exitPickMode() {
@@ -280,7 +314,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
     final target = _pickTarget;
     if (target == null || _saving) return;
     setState(() => _saving = true);
-    final center = _mapController.camera.center;
+    final center = _cameraCenter;
     final ok = await _controller.writeCoordinates(
       localPath: target.localPath,
       remotePath: target.remotePath,
@@ -308,7 +342,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
     for (final p in _controller.pins) {
       if (p.path == savedPath) {
         setState(() => _selectedPin = p);
-        if (_mapReady) _mapController.move(LatLng(p.latitude, p.longitude), 17);
+        _moveCamera(LatLng(p.latitude, p.longitude), 17);
         break;
       }
     }
@@ -381,15 +415,53 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
         title: context.l10n.mapNoPins,
         subtitle: loadError,
         actionLabel: context.l10n.mapTryAgain,
-        onAction: _controller.loadFiles,
+        onAction: _controller.refresh,
+      );
+    }
+    if (_controller.needsArchiveSync && _controller.pins.isEmpty) {
+      return ArchiveEmptyView(
+        icon: Icons.map_outlined,
+        title: context.l10n.mapNoPins,
+        subtitle: _controller.syncHint ?? context.l10n.mapSyncToSeeLocations,
+        actionLabel: context.l10n.mapOpenArchive,
+        onAction: _openArchive,
       );
     }
     return null;
   }
 
+  Widget _withDismiss(Widget guard, QAppColors colors) {
+    final canDismiss = ModalRoute.of(context)?.impliesAppBarDismissal ?? false;
+    if (!canDismiss) return guard;
+    return Stack(
+      children: [
+        guard,
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: _MapControl(
+                colors: colors,
+                icon: Icons.arrow_back,
+                tooltip: context.l10n.commonClose,
+                onTap: () => Navigator.of(context).maybePop(),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openArchive() {
+    requestRootTab(FlipperRootTab.archive);
+    Navigator.of(context).maybePop();
+  }
+
   Widget _buildDesktopLayout(QAppColors colors) {
     final guard = _buildBrowseGuard(colors);
-    if (guard != null) return guard;
+    if (guard != null) return _withDismiss(guard, colors);
     final picking = _mode == _MapMode.pick;
     final showPanel = _panelOpen && !picking;
 
@@ -444,10 +516,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
   Widget _buildMobileLayout(QAppColors colors) {
     final guard = _buildBrowseGuard(colors);
     if (guard != null) {
-      return Padding(
-        padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
-        child: guard,
-      );
+      return _withDismiss(guard, colors);
     }
     final picking = _mode == _MapMode.pick;
     return Stack(
@@ -552,7 +621,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
         colors: colors,
         icon: Icons.refresh,
         tooltip: context.l10n.mapReloadFiles,
-        onTap: _controller.loading ? null : _controller.loadFiles,
+        onTap: _controller.loading ? null : _controller.refresh,
       ),
       const SizedBox(width: 8),
       _MapControl(
@@ -603,57 +672,17 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       _failedTemplate = null;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncNotice(tiles));
+
+    final system = _settings.useSystemMap;
     return Stack(
       children: [
-        FlutterMap(
-          mapController: _mapController,
-          options: MapOptions(
-            initialCenter: _initialCenter(),
-            initialZoom: _initialZoom(),
-            maxZoom: tiles.maxZoom,
-            minZoom: 2,
-            backgroundColor: colors.isDark
-                ? const Color(0xFF1A1A1A)
-                : const Color(0xFFFFFFFF),
-            onMapReady: () {
-              _mapReady = true;
-              _maybeAutoCenter();
-            },
-            onPositionChanged: (_, hasGesture) {
-              if (!hasGesture) return;
-              _userMovedMap = true;
-              if (!_settings.autoCenter && !_settings.trackDevice) return;
-              _stopFollowing();
-            },
-            onTap: picking
-                ? null
-                : (_, _) => setState(() => _selectedPin = null),
-          ),
-          children: [
-            TileLayer(
-              key: ValueKey(tiles.urlTemplate),
-              tileProvider: _providerFor(tiles.urlTemplate),
-              urlTemplate: tiles.urlTemplate,
-              errorTileCallback: (_, _, _) => _reportTileFailure(tiles),
-              subdomains: tiles.subdomains,
-              userAgentPackageName: 'qunleashed',
-              maxZoom: tiles.maxZoom,
-              retinaMode:
-                  tiles.retina &&
-                  _settings.retina &&
-                  RetinaMode.isHighDensity(context),
-            ),
-            MarkerLayer(
-              markers: _buildMarkers(
-                colors,
-                hidePinId: picking ? _pickTarget?.localPath : null,
-              ),
-            ),
-          ],
-        ),
+        if (system)
+          _buildSystemMap(colors, picking)
+        else
+          _buildTileMap(colors, tiles, picking),
         if (picking) Positioned.fill(child: _buildPickOverlay(colors)),
 
-        if (tiles.attribution.isNotEmpty)
+        if (!system && tiles.attribution.isNotEmpty)
           Positioned(
             left: leftInset + 6,
             bottom: sheet + 4,
@@ -675,29 +704,124 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
     );
   }
 
+  Widget _buildSystemMap(QAppColors colors, bool picking) {
+    final annotations = _buildAnnotations(
+      colors,
+      hidePinId: picking ? _pickTarget?.localPath : null,
+    );
+    _ensureMarkerImages(annotations.requests);
+
+    final start = _initialCenter();
+    return AppleMap(
+      initialCamera: AppleMapCamera(
+        latitude: start.latitude,
+        longitude: start.longitude,
+        zoom: _initialZoom(),
+      ),
+      style: _settings.systemStyle,
+      dark: colors.isDark,
+      images: _markers.images,
+      annotations: annotations.annotations,
+      showsUserLocation:
+          _controller.locationStatus == MapLocationStatus.granted,
+      onMapCreated: (controller) {
+        _systemMap = controller;
+        _mapReady = true;
+        _maybeAutoCenter();
+      },
+      onCameraMoved: (camera, byGesture) {
+        _systemCamera = camera;
+        if (!byGesture) return;
+        _userMovedMap = true;
+        if (!_settings.autoCenter && !_settings.trackDevice) return;
+        _stopFollowing();
+      },
+      onAnnotationTap: (id) {
+        for (final pin in _controller.pins) {
+          if (pin.id != id) continue;
+          _selectPin(pin);
+          return;
+        }
+      },
+      onMapTap: picking ? null : (_, _) => setState(() => _selectedPin = null),
+    );
+  }
+
+  Widget _buildTileMap(QAppColors colors, MapTileConfig tiles, bool picking) {
+    return FlutterMap(
+      key: const ValueKey('tiles'),
+      mapController: _mapController,
+      options: MapOptions(
+        initialCenter: _initialCenter(),
+        initialZoom: _initialZoom(),
+        maxZoom: tiles.maxZoom,
+        minZoom: 2,
+        backgroundColor: colors.isDark
+            ? const Color(0xFF1A1A1A)
+            : const Color(0xFFFFFFFF),
+        onMapReady: () {
+          _mapReady = true;
+          _maybeAutoCenter();
+        },
+        onPositionChanged: (_, hasGesture) {
+          if (!hasGesture) return;
+          _userMovedMap = true;
+          if (!_settings.autoCenter && !_settings.trackDevice) return;
+          _stopFollowing();
+        },
+        onTap: picking ? null : (_, _) => setState(() => _selectedPin = null),
+      ),
+      children: [
+        TileLayer(
+          key: ValueKey(tiles.urlTemplate),
+          tileProvider: _providerFor(tiles.urlTemplate),
+          urlTemplate: tiles.urlTemplate,
+          errorTileCallback: (_, _, _) => _reportTileFailure(tiles),
+          subdomains: tiles.subdomains,
+          userAgentPackageName: 'com.doctormobile.app',
+          maxZoom: tiles.maxZoom,
+          retinaMode:
+              tiles.retina &&
+              _settings.retina &&
+              RetinaMode.isHighDensity(context),
+        ),
+        MarkerLayer(
+          markers: _buildMarkers(
+            colors,
+            hidePinId: picking ? _pickTarget?.localPath : null,
+          ),
+        ),
+      ],
+    );
+  }
+
   /// Everything the map has to say goes through the one app-wide notification:
   /// the missing-key and dead-source notices, and the pick-mode hint. Keyed so
   /// a rebuild does not re-raise a notice that is already up.
   void _syncNotice(MapTileConfig tiles) {
     if (!mounted) return;
+    final tileNotices = !_settings.useSystemMap;
 
     final String? key;
     String message = '';
     var type = QNotificationType.warning;
     VoidCallback? onTap;
+    var duration = const Duration(seconds: 3);
 
     if (_mode == _MapMode.pick) {
       key = 'pick';
       message = context.l10n.mapDragHint;
       type = QNotificationType.info;
-    } else if (tiles.missingKey) {
+    } else if (tileNotices && tiles.missingKey) {
       key = 'key';
       message = context.l10n.mapNeedsKeyTap;
       onTap = () => openRoute(context, AppRoute.mapSettings);
-    } else if (_failedTemplate == tiles.urlTemplate) {
+      duration = Duration.zero;
+    } else if (tileNotices && _failedTemplate == tiles.urlTemplate) {
       key = 'dead:${tiles.urlTemplate}';
       message = context.l10n.mapSourceNotAnswering(tiles.label);
       onTap = () => openRoute(context, AppRoute.mapSettings);
+      duration = Duration.zero;
     } else {
       key = null;
     }
@@ -711,7 +835,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
     _notice = context.showNotification(
       message,
       type: type,
-      duration: const Duration(seconds: 3),
+      duration: duration,
       onTap: onTap,
     );
   }
@@ -731,17 +855,32 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
               ..idleTimeout = const Duration(seconds: 30)
               ..connectionTimeout = const Duration(seconds: 15),
           ),
+          retries: 3,
+          when: (response) =>
+              response.statusCode == 429 || response.statusCode >= 500,
+          whenError: (error, _) =>
+              error is SocketException ||
+              error is HttpException ||
+              error is TimeoutException,
+          delay: (attempt) => Duration(
+            milliseconds:
+                (400 * math.pow(2, attempt)).round() + _jitter.nextInt(250),
+          ),
         ),
       );
     }
     return _tileProvider!;
   }
 
+  static final math.Random _jitter = math.Random();
+
   /// A single dropped tile means nothing — one stalled connection out of a
   /// screenful. The notice is for a source that has actually stopped answering,
   /// so it needs a run of failures to appear and clears itself once tiles start
   /// arriving again (a quiet spell with no new errors).
   void _reportTileFailure(MapTileConfig tiles) {
+    if (_openedAt.elapsed < _tileGracePeriod) return;
+
     _tileFailures++;
     _tileQuietTimer?.cancel();
     _tileQuietTimer = Timer(const Duration(seconds: 5), () {
@@ -751,7 +890,7 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
       setState(() => _failedTemplate = null);
     });
 
-    if (_tileFailures < 8 || _failedTemplate == tiles.urlTemplate) return;
+    if (_tileFailures < 16 || _failedTemplate == tiles.urlTemplate) return;
     _failedTemplate = tiles.urlTemplate;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
@@ -817,6 +956,70 @@ class _FlipperMapPageState extends State<FlipperMapPage> {
     if (_controller.userPosition != null) return 16;
     if (_controller.pins.isNotEmpty) return 14;
     return 2;
+  }
+
+  ({List<AppleMapAnnotation> annotations, List<MapMarkerRequest> requests})
+  _buildAnnotations(QAppColors colors, {String? hidePinId}) {
+    final annotations = <AppleMapAnnotation>[];
+    final requests = <MapMarkerRequest>[];
+
+    final device = _controller.devicePosition;
+    if (device != null && device.hasFix) {
+      const glyph = Icons.gps_fixed;
+      final request = MapMarkerRequest.icon(icon: glyph, color: colors.info);
+      requests.add(request);
+      annotations.add(
+        AppleMapAnnotation(
+          id: '__device__',
+          latitude: device.latitude,
+          longitude: device.longitude,
+          imageKey: request.key,
+          zIndex: 100,
+        ),
+      );
+    }
+
+    final visiblePins = hidePinId == null
+        ? _controller.pins
+        : _controller.pins.where((pin) => pin.path != hidePinId).toList();
+    for (final entry in _spreadOverlappingPins(visiblePins).entries) {
+      final pin = entry.key;
+      final selected = _selectedPin?.id == pin.id;
+      final request = MapMarkerRequest.asset(
+        asset: _assetForPin(pin),
+        color: pin.category.color,
+        selected: selected,
+      );
+      requests.add(request);
+      annotations.add(
+        AppleMapAnnotation(
+          id: pin.id,
+          latitude: entry.value.latitude,
+          longitude: entry.value.longitude,
+          imageKey: request.key,
+          zIndex: selected ? 50 : 0,
+        ),
+      );
+    }
+
+    return (annotations: annotations, requests: requests);
+  }
+
+  void _ensureMarkerImages(List<MapMarkerRequest> requests) {
+    if (_markerWorkPending) return;
+    final missing = requests
+        .where((request) => !_markers.images.containsKey(request.key))
+        .toList();
+    if (missing.isEmpty) return;
+
+    _markerWorkPending = true;
+    final pixelRatio = MediaQuery.devicePixelRatioOf(context);
+    unawaited(
+      _markers.ensure(missing, pixelRatio: pixelRatio).then((produced) {
+        _markerWorkPending = false;
+        if (produced && mounted) setState(() {});
+      }),
+    );
   }
 
   List<Marker> _buildMarkers(QAppColors colors, {String? hidePinId}) {

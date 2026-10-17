@@ -1,19 +1,17 @@
 import 'dart:ui' as ui;
 
-import '../../../../../components/sensitive_surface.dart';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../../../../components/flipper_screen_animation.dart';
 
-import '../../../../../theme/colors/display.dart';
 import '../../../../../theme/theme.dart';
+import '../frame_decoder.dart';
 import '../layout.dart';
 import '../models/models.dart';
 
-class RemoteScreen extends StatelessWidget with SensitiveSurface {
+class RemoteScreen extends StatelessWidget {
   const RemoteScreen({
     super.key,
     required this.size,
@@ -54,7 +52,6 @@ class RemoteScreen extends StatelessWidget with SensitiveSurface {
     );
 
     final shell = _Shell(
-      colors: colors,
       frameListenable: frameListenable,
       orientation: orientation,
       frameWidth: frameWidth,
@@ -82,14 +79,12 @@ class RemoteScreen extends StatelessWidget with SensitiveSurface {
 
 class _Shell extends StatelessWidget {
   const _Shell({
-    required this.colors,
     required this.frameListenable,
     required this.orientation,
     required this.frameWidth,
     required this.frameHeight,
   });
 
-  final QAppColors colors;
   final ValueListenable<ui.Image?> frameListenable;
   final StreamOrientation orientation;
   final double frameWidth;
@@ -97,18 +92,19 @@ class _Shell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final display = DisplayColors.forColors(colors);
+    const orange = Color(kFlipperScreenBg);
+    const black = Color(kFlipperScreenFg);
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: display.border, width: 3),
+        border: Border.all(color: black, width: 3),
         borderRadius: BorderRadius.circular(16),
       ),
       padding: const EdgeInsets.all(6),
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(color: display.border, width: 2),
+          border: Border.all(color: black, width: 2),
           borderRadius: BorderRadius.circular(12),
-          color: display.background,
+          color: orange,
         ),
         padding: const EdgeInsets.all(8),
         child: SizedBox(
@@ -136,11 +132,10 @@ class _LiveFrame extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (image == null) {
-      final display = DisplayColors.forColors(context.appColors);
-      return FlipperScreenAnimation(
+      return const FlipperScreenAnimation(
         active: true,
-        fg: display.foreground,
-        bg: display.background,
+        fg: Color(kFlipperScreenFg),
+        bg: Color(kFlipperScreenBg),
       );
     }
 

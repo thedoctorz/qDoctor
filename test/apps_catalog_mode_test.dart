@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/apps/data/catalog_mode.dart';
-import 'package:qunleashed/pages/apps/data/models/card.dart';
+import 'package:doctormobile/pages/apps/data/catalog_mode.dart';
+import 'package:doctormobile/pages/apps/data/models/card.dart';
 
 AppSdk _sdk(String api, {String target = 'f7', bool latest = false}) => AppSdk(
   id: api,

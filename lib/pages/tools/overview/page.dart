@@ -2,35 +2,40 @@ import '../../../services/localization/l10n.dart';
 
 import 'dart:io';
 
+import 'package:flipperlib/flipperlib.dart';
 import 'package:flutter/material.dart';
 
 import '../../../components/cardlist.dart';
 import '../../../components/icon.dart';
 import '../../../components/navigation.dart';
+import '../../../components/notification.dart';
 import '../../../theme/theme.dart';
+import '../../../components/dialogs/action.dart';
 import '../../../services/assembler/controller.dart';
 import '../paint/manager/page.dart';
 import '../remote/desktop/page.dart';
 import '../remote/cli/page.dart';
 import '../infrared/categories_page.dart';
 import '../mifare/recover_page.dart';
-import '../subghz/seed/seed_page.dart';
 import '../plotter/page.dart';
+import '../subghz/decode_raw/decode_raw_page.dart';
+import '../subghz/live_rx/live_rx_page.dart';
+import '../subghz/workflow/hitag2_workflow_page.dart';
+import '../subghz/workflow/psa_workflow_page.dart';
 import 'models/tool.dart';
+import 'pinned_tools.dart';
 import 'widgets/app_version.dart';
 import 'widgets/tool_item_badge.dart';
 import 'widgets/tool_item_text.dart';
-import '../../devices/device_scope.dart';
-import '../../../services/connection/link_service.dart';
+import '../../../services/logging.dart';
 
 class ToolsPage extends StatelessWidget {
   const ToolsPage({super.key});
 
-  /// [localReady] is whether this computer can compile right now, which is
-  /// what `ensureReady` enforces - not which backend the catalog is using.
-  /// Flibler has no server path, so pinning the server or a catalog build
-  /// faulting leaves it working; it used to take the entry point with it. #248
-  static List<ToolGroup> _toolGroups(L10n s, bool localReady) => [
+  /// [localBuilds] is on only while builds run on this computer: without a
+  /// deployed SDK and toolchain, or with the build server in charge, the tool
+  /// has nothing to compile a folder or a repo with.
+  static List<ToolGroup> _toolGroups(L10n s, bool localBuilds) => [
     ToolGroup(
       header: ToolCardHeader(
         iconAsset: 'assets/ic/device/flipper.svg',
@@ -39,6 +44,7 @@ class ToolsPage extends StatelessWidget {
       ),
       items: [
         ToolItemModel(
+          id: 'remote',
           iconAsset: 'assets/ic/app/controller.svg',
           iconColor: const Color(0xFFFFFFFF),
           title: s.toolRemoteDesktop,
@@ -47,6 +53,7 @@ class ToolsPage extends StatelessWidget {
         ),
         if (!Platform.isIOS)
           ToolItemModel(
+            id: 'cli',
             iconAsset: 'assets/ic/app/cli.svg',
             iconColor: const Color(0xFFFF9B34),
             title: s.toolCommandLine,
@@ -54,6 +61,7 @@ class ToolsPage extends StatelessWidget {
             onTap: _openCliPage,
           ),
         ToolItemModel(
+          id: 'paint',
           iconAsset: 'assets/ic/app/paint-large.svg',
           iconColor: const Color(0xFFE85858),
           title: s.toolPixelDraw,
@@ -62,7 +70,7 @@ class ToolsPage extends StatelessWidget {
         ),
       ],
     ),
-    if (AssemblerController.isSupported)
+    if (localBuilds)
       ToolGroup(
         header: ToolCardHeader(
           iconAsset: 'assets/ic/app/apps.svg',
@@ -71,14 +79,11 @@ class ToolsPage extends StatelessWidget {
         ),
         items: [
           ToolItemModel(
+            id: 'flibler',
             iconAsset: 'assets/ic/fileformat/plugins.svg',
             iconColor: const Color(0xFF4DB6AC),
             title: 'Flibler',
-            // Not ready is worth saying rather than hiding: the page links to
-            // the assembler settings, and deploying the SDK brings it back.
-            description: localReady
-                ? s.toolFliblerSubtitle
-                : s.toolFliblerNeedsSdk,
+            description: s.toolFliblerSubtitle,
             onTap: _openFliblerPage,
             badge: s.toolBadgeBeta,
           ),
@@ -92,6 +97,7 @@ class ToolsPage extends StatelessWidget {
       ),
       items: [
         ToolItemModel(
+          id: 'mifare',
           iconAsset: 'assets/ic/fileformat/nfc.svg',
           iconColor: const Color(0xFF34C7A4),
           title: s.toolMifare,
@@ -100,14 +106,7 @@ class ToolsPage extends StatelessWidget {
           badge: s.toolBadgeBeta,
         ),
         ToolItemModel(
-          iconAsset: 'assets/ic/fileformat/sub.svg',
-          iconColor: const Color(0xFFFF9B34),
-          title: s.toolSeedRecovery,
-          description: s.toolSeedRecoverySubtitle,
-          routeBuilder: _buildSeedPage,
-          badge: s.toolBadgeBeta,
-        ),
-        ToolItemModel(
+          id: 'ir',
           iconAsset: 'assets/ic/fileformat/ir.svg',
           iconColor: const Color(0xFFAF52DE),
           title: s.toolRemotesLibrary,
@@ -115,6 +114,7 @@ class ToolsPage extends StatelessWidget {
           routeBuilder: _buildIrLibPage,
         ),
         ToolItemModel(
+          id: 'plotter',
           iconAsset: 'assets/ic/app/sub-tools.svg',
           iconColor: const Color(0xFFFF9B34),
           title: s.toolPulsePlotter,
@@ -123,6 +123,7 @@ class ToolsPage extends StatelessWidget {
           badge: s.toolBadgeBeta,
         ),
         ToolItemModel(
+          id: 'map',
           iconAsset: 'assets/ic/fileformat/sub.svg',
           iconColor: const Color(0xFF8BC34A),
           title: s.toolSavedLocations,
@@ -132,8 +133,50 @@ class ToolsPage extends StatelessWidget {
       ],
     ),
     ToolGroup(
+      header: ToolCardHeader(
+        iconAsset: 'assets/ic/fileformat/sub.svg',
+        iconColor: const Color(0xFF2E9E7B),
+        title: 'Sub-GHz',
+      ),
       items: [
         ToolItemModel(
+          id: 'subghz-rx',
+          iconAsset: 'assets/ic/fileformat/sub.svg',
+          iconColor: const Color(0xFF2E9E7B),
+          title: s.toolSubghzRx,
+          description: s.toolSubghzRxSubtitle,
+          routeBuilder: _buildLiveRxPage,
+        ),
+        ToolItemModel(
+          id: 'decode-raw',
+          iconAsset: 'assets/ic/fileformat/sub.svg',
+          iconColor: const Color(0xFF2E9E7B),
+          title: s.toolDecodeRaw,
+          description: s.toolDecodeRawSubtitle,
+          routeBuilder: _buildDecodeRawPage,
+        ),
+        ToolItemModel(
+          id: 'hitag2',
+          iconAsset: 'assets/ic/fileformat/sub.svg',
+          iconColor: const Color(0xFF2E9E7B),
+          title: 'Hitag2Hell',
+          description: 'Recover Fiat/Renault Hitag2 keys from a capture',
+          routeBuilder: _buildHitag2Page,
+        ),
+        ToolItemModel(
+          id: 'psa',
+          iconAsset: 'assets/ic/fileformat/sub.svg',
+          iconColor: const Color(0xFF2E9E7B),
+          title: 'PSA Decrypt',
+          description: 'Recover PSA rolling-code fields from a capture',
+          routeBuilder: _buildPsaPage,
+        ),
+      ],
+    ),
+    ToolGroup(
+      items: [
+        ToolItemModel(
+          id: 'settings',
           iconAsset: 'assets/ic/fileformat/settings.svg',
           iconColor: const Color(0xFF9E9E9E),
           title: s.settingsTitle,
@@ -145,6 +188,7 @@ class ToolsPage extends StatelessWidget {
     ToolGroup(
       items: [
         ToolItemModel(
+          id: 'about',
           iconAsset: 'assets/ic/info/lg.svg',
           iconColor: const Color(0xFF589DFF),
           title: s.aboutTitle,
@@ -202,35 +246,40 @@ class ToolsPage extends StatelessWidget {
     );
   }
 
-  /// One tool page at a time, whichever way the card opens one.
-  ///
-  /// Both branches, because every item here opens a page: the five that
-  /// declare `onTap` push too - the CLI page directly, the rest through
-  /// `openRoute` - and the first draft of this guard sat inside the
-  /// `routeBuilder` branch only, under a comment claiming it covered the card
-  /// list. It covered six of eleven cards, and the five it missed included the
-  /// worst one: `CliPage.initState` kicks `_bootstrap()` behind a per-instance
-  /// `_busy`, so two of them open two CLI channels on one Flipper.
-  ///
-  /// The worst payload among the rest is Recover, which builds its own
-  /// controller in `initState` and calls `start()` - `_running` is per
-  /// instance, so it guards nothing across two stacked pages. Both load the
-  /// user's key dictionary and both write it back, so one run's recovered keys
-  /// are lost. #244.
-  VoidCallback? _resolveTap(BuildContext context, ToolItemModel item) {
+  static ToolItemModel? toolById(L10n s, bool localBuilds, String id) {
+    for (final group in _toolGroups(s, localBuilds)) {
+      for (final item in group.items) {
+        if (item.id == id) return item;
+      }
+    }
+    return null;
+  }
+
+  static void open(BuildContext context, ToolItemModel item) {
+    final onTap = item.onTap;
+    if (onTap != null) {
+      onTap(context);
+      return;
+    }
     final routeBuilder = item.routeBuilder;
-    final open =
-        item.onTap ??
-        (routeBuilder == null
-            ? null
-            : (BuildContext c) => pushPage(c, routeBuilder));
-    if (open == null) return null;
-    // One guard over both kinds of item, so the mistake the comment above
-    // describes cannot be made again by adding a branch.
-    return () {
-      if (!isTopRoute(context)) return;
-      open(context);
-    };
+    if (routeBuilder != null) {
+      Navigator.of(context).push(MaterialPageRoute(builder: routeBuilder));
+    }
+  }
+
+  VoidCallback? _resolveTap(BuildContext context, ToolItemModel item) {
+    if (item.onTap == null && item.routeBuilder == null) return null;
+    return () => open(context, item);
+  }
+
+  void _togglePin(BuildContext context, ToolItemModel item) {
+    final added = PinnedToolsStore.instance.toggle(item.id);
+    context.showNotification(
+      added
+          ? context.l10n.toolsPinnedHome(item.title)
+          : context.l10n.toolsUnpinnedHome(item.title),
+      type: QNotificationType.good,
+    );
   }
 
   @override
@@ -250,7 +299,7 @@ class ToolsPage extends StatelessWidget {
               children: [
                 for (final group in _toolGroups(
                   context.l10n,
-                  AssemblerController.instance.localReady,
+                  AssemblerController.instance.backendChoice.isLocal,
                 ))
                   if (group.items.isNotEmpty)
                     Padding(
@@ -261,6 +310,8 @@ class ToolsPage extends StatelessWidget {
                             : _groupHeader(group.header!, colors),
                         items: group.items,
                         onTap: (item) => _resolveTap(context, item),
+                        onLongPress: (item) =>
+                            () => _togglePin(context, item),
                         itemBuilder: _toolItem,
                       ),
                     ),
@@ -274,11 +325,15 @@ class ToolsPage extends StatelessWidget {
   }
 }
 
-Widget _buildRecoverPage(BuildContext context) =>
-    RecoverPage(client: DeviceScope.of(context).client);
+Widget _buildRecoverPage(BuildContext context) => const RecoverPage();
 
-Widget _buildSeedPage(BuildContext context) =>
-    SeedPage(client: DeviceScope.of(context).client);
+Widget _buildDecodeRawPage(BuildContext context) => const DecodeRawPage();
+
+Widget _buildLiveRxPage(BuildContext context) => const LiveRxPage();
+
+Widget _buildHitag2Page(BuildContext context) => const Hitag2WorkflowPage();
+
+Widget _buildPsaPage(BuildContext context) => const PsaWorkflowPage();
 
 Widget _buildPlotterPage(BuildContext context) => const PulsePlotterPage();
 
@@ -296,21 +351,47 @@ Future<void> _openSettingsPage(BuildContext context) async {
   await openRoute(context, AppRoute.appSettings);
 }
 
-Widget _buildPaintPage(BuildContext context) =>
-    ProjectManagerPage(client: DeviceScope.of(context).client);
+Widget _buildPaintPage(BuildContext context) => const ProjectManagerPage();
 
 Future<void> _openFliblerPage(BuildContext context) async {
   await openRoute(context, AppRoute.fliblerProject);
 }
 
 Widget _buildRemoteControlPage(BuildContext context) =>
-    RemoteControlPage(client: DeviceScope.of(context).client);
+    const RemoteControlPage();
 
 Future<void> _openCliPage(BuildContext context) async {
-  final client = DeviceScope.of(context).client;
-  await Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (_) => CliPage(client: client, links: LinkService.instance),
-    ),
-  );
+  final client = FlipperOneClient().get();
+  final connectedDevice = client.connectedDevice;
+
+  if (connectedDevice?.isBle == true) {
+    final shouldContinue =
+        await showDialog<bool>(
+          context: context,
+          barrierColor: context.appColors.dialogBarrier,
+          builder: (dialogContext) {
+            return FlipperActionDialog(
+              imageAssetPath: kCliBluetoothUnavailableAssetPath,
+              title: kCliBluetoothUnavailableTitle,
+              text: kCliBluetoothUnavailableMessage,
+              actionText: kCliBluetoothUnavailableAction,
+              onAction: () => Navigator.of(dialogContext).pop(true),
+            );
+          },
+        ) ??
+        false;
+    if (!shouldContinue || !context.mounted) return;
+
+    try {
+      await client.disconnect();
+    } catch (e) {
+      LogService.info('[CLI] disconnect before terminal failed: $e');
+      return;
+    }
+
+    if (!context.mounted) return;
+  }
+
+  await Navigator.of(context)
+      .push(MaterialPageRoute(builder: (_) => const CliPage()));
 }

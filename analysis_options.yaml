@@ -1,15 +1,24 @@
 include: package:flutter_lints/flutter.yaml
 
 analyzer:
+  errors:
+    # The private constructors keep a public parameter name in front of a
+    # private field. The lint only offers renaming that parameter.
+    prefer_initializing_formals: ignore
   exclude:
     - build/**
     - lib/modules/flipperlib/lib/src/proto/generated/**
     # Another package's tests, with their own dev dependencies. The app
     # never resolves those, so analysing them here reports every matcher
     # as undefined.
-    - lib/modules/*/test/**
+    # Nested packages (plugin examples, cargokit) ship their own pubspecs.
+    # Analysing them from the app reports every one of their imports missing.
+    - lib/modules/**/test/**
+    - lib/modules/**/example/**
+    - lib/modules/**/cargokit/**
     - lib/modules/extensions/**
     - lib/modules/irondash/**
+    - lib/modules/universal_ble/**
     - android/**
     - ios/**
     - web/**

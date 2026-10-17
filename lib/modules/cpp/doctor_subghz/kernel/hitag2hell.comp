@@ -1,0 +1,413 @@
+#version 450
+/* AUTO-GENERATED from hitag2hell_kernel.inc by kernel/gen_hitag2hell_comp.py.
+ * Do not edit by hand; edit the .inc (shared with the CPU/Metal kernels) and
+ * regenerate. Vulkan compute twin of the iOS Metal hitag2hell kernel, kept
+ * pure 32-bit so it runs on every Android GPU (Adreno/Mali/PowerVR/Xclipse)
+ * without the shaderInt64 feature.
+ *
+ * Grid: x = candidate index (candidate_index_base + gid0), y = i1 in [0,1024).
+ * Bindings (match hitag2hell_vulkan.c):
+ *   0: keystream[32]      1: candidates[] (2 uint/candidate: low32, high16)
+ *   2: matches[] (2 uint/slot: lo, hi)   3: matches_found (atomic uint)
+ */
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define bitslice_t uint
+#define uchar uint
+#define ushort uint
+#define MAX_BITSLICES 32u
+#define HITAG2HELL_NEGBOOL(c) (bool(c) ? 0xFFFFFFFFu : 0u)
+
+/* Portable bitsliced Hitag-2 filter (same boolean form as hitag2hell_f.inc). */
+#define f_a_bs(a, b, c, d) (~(((a | b) & c) ^ (a | d) ^ b))
+#define f_b_bs(a, b, c, d) (~(((d | c) & (a ^ b)) ^ (d | a | b)))
+#define f_c_bs(a, b, c, d, e) \
+    (~((((((c ^ e) | d) & a) ^ b) & (c ^ b)) ^ (((d ^ e) | a) & ((d ^ b) | c))))
+#define lfsr_bs(i)                                                                          \
+    (state[-2 + (i) + 0] ^ state[-2 + (i) + 2] ^ state[-2 + (i) + 3] ^ state[-2 + (i) + 6] ^ \
+     state[-2 + (i) + 7] ^ state[-2 + (i) + 8] ^ state[-2 + (i) + 16] ^                      \
+     state[-2 + (i) + 22] ^ state[-2 + (i) + 23] ^ state[-2 + (i) + 26] ^                     \
+     state[-2 + (i) + 30] ^ state[-2 + (i) + 41] ^ state[-2 + (i) + 42] ^                     \
+     state[-2 + (i) + 43] ^ state[-2 + (i) + 46] ^ state[-2 + (i) + 47])
+
+layout(std430, binding = 0) readonly buffer KeystreamBuf { uint keystream[]; };
+layout(std430, binding = 1) readonly buffer CandidateBuf { uint candidates[]; };
+layout(std430, binding = 2) buffer MatchBuf { uint matches[]; };
+layout(std430, binding = 3) buffer FoundBuf { uint matches_found; };
+
+layout(push_constant) uniform Params {
+    uint candidate_index_base;
+    uint count;
+    uint matches_cap;
+} pc;
+
+void main() {
+    uint gid0 = gl_GlobalInvocationID.x;
+    uint gid1 = gl_GlobalInvocationID.y;
+    if(gid0 >= pc.count) {
+        return;
+    }
+    // 48-bit candidate as (low32, high16); set all state bits except lowest 2.
+    uint cidx = 2u * (pc.candidate_index_base + gid0);
+    uint clo = candidates[cidx];
+    uint chi = candidates[cidx + 1u];
+    uint state[78];
+    for(uint bi = 0u; bi < 46u; bi++) {
+        uint bit = (bi < 32u) ? ((clo >> bi) & 1u) : ((chi >> (bi - 32u)) & 1u);
+        state[bi] = HITAG2HELL_NEGBOOL(bit);
+    }
+
+ // set bits 3, 6, 8, 12, 15
+ state[-2+1+3] = 0xaaaaaaaau;
+ state[-2+1+6] = 0xccccccccu;
+ state[-2+1+8] = 0xf0f0f0f0u;
+ state[-2+1+12] = 0xff00ff00u;
+ state[-2+1+15] = 0xffff0000u;
+ uint i1 = gid1;
+ state[-2+18] = HITAG2HELL_NEGBOOL(i1 & 0x1u);
+ state[-2+22] = HITAG2HELL_NEGBOOL(i1 & 0x2u);
+ state[-2+24] = HITAG2HELL_NEGBOOL(i1 & 0x4u);
+ state[-2+27] = HITAG2HELL_NEGBOOL(i1 & 0x8u);
+ state[-2+30] = HITAG2HELL_NEGBOOL(i1 & 0x10u);
+ state[-2+32] = HITAG2HELL_NEGBOOL(i1 & 0x20u);
+ state[-2+35] = HITAG2HELL_NEGBOOL(i1 & 0x40u);
+ state[-2+45] = HITAG2HELL_NEGBOOL(i1 & 0x80u);
+ state[-2+47] = HITAG2HELL_NEGBOOL(i1 & 0x100u);
+ state[-2+48] = HITAG2HELL_NEGBOOL(i1 & 0x200u); // guess lfsr output 0
+ // 0xfc07fef3f9feu
+ bitslice_t filter1_0 = f_a_bs(state[-2+3],state[-2+4],state[-2+6],state[-2+7]);
+ bitslice_t filter1_1 = f_b_bs(state[-2+9],state[-2+13],state[-2+15],state[-2+16]);
+ bitslice_t filter1_2 = f_b_bs(state[-2+18],state[-2+22],state[-2+24],state[-2+27]);
+ bitslice_t filter1_3 = f_b_bs(state[-2+29],state[-2+30],state[-2+32],state[-2+34]);
+ bitslice_t filter1_4 = f_a_bs(state[-2+35],state[-2+44],state[-2+45],state[-2+47]);
+ bitslice_t filter1 = f_c_bs(filter1_0, filter1_1, filter1_2, filter1_3, filter1_4);
+ bitslice_t results1 = filter1 ^ keystream[1];
+ if((results1 == 0u)) return;
+ bitslice_t filter2_0 = f_a_bs(state[-2+4],state[-2+5],state[-2+7],state[-2+8]);
+ bitslice_t filter2_3 = f_b_bs(state[-2+30],state[-2+31],state[-2+33],state[-2+35]);
+ bitslice_t filter3_0 = f_a_bs(state[-2+5],state[-2+6],state[-2+8],state[-2+9]);
+ bitslice_t filter5_2 = f_b_bs(state[-2+22],state[-2+26],state[-2+28],state[-2+31]);
+ bitslice_t filter6_2 = f_b_bs(state[-2+23],state[-2+27],state[-2+29],state[-2+32]);
+ bitslice_t filter7_2 = f_b_bs(state[-2+24],state[-2+28],state[-2+30],state[-2+33]);
+ bitslice_t filter9_1 = f_b_bs(state[-2+17],state[-2+21],state[-2+23],state[-2+24]);
+ bitslice_t filter9_2 = f_b_bs(state[-2+26],state[-2+30],state[-2+32],state[-2+35]);
+ bitslice_t filter10_0 = f_a_bs(state[-2+12],state[-2+13],state[-2+15],state[-2+16]);
+ bitslice_t filter11_0 = f_a_bs(state[-2+13],state[-2+14],state[-2+16],state[-2+17]);
+ bitslice_t filter12_0 = f_a_bs(state[-2+14],state[-2+15],state[-2+17],state[-2+18]);
+ bitslice_t filter14_1 = f_b_bs(state[-2+22],state[-2+26],state[-2+28],state[-2+29]);
+ bitslice_t filter15_1 = f_b_bs(state[-2+23],state[-2+27],state[-2+29],state[-2+30]);
+ bitslice_t filter15_3 = f_b_bs(state[-2+43],state[-2+44],state[-2+46],state[-2+48]);
+ bitslice_t filter16_1 = f_b_bs(state[-2+24],state[-2+28],state[-2+30],state[-2+31]);
+ for(uint i2 = 0u; i2 < (1u<<5);){
+ state[-2+10] = HITAG2HELL_NEGBOOL(i2 & 0x1u);
+ state[-2+19] = HITAG2HELL_NEGBOOL(i2 & 0x2u);
+ state[-2+25] = HITAG2HELL_NEGBOOL(i2 & 0x4u);
+ state[-2+36] = HITAG2HELL_NEGBOOL(i2 & 0x8u);
+ state[-2+49] = HITAG2HELL_NEGBOOL(i2 & 0x10u); // guess lfsr output 1
+ i2++;
+ // 0xfe07fffbfdffu
+ bitslice_t filter2_1 = f_b_bs(state[-2+10],state[-2+14],state[-2+16],state[-2+17]);
+ bitslice_t filter2_2 = f_b_bs(state[-2+19],state[-2+23],state[-2+25],state[-2+28]);
+ bitslice_t filter2_4 = f_a_bs(state[-2+36],state[-2+45],state[-2+46],state[-2+48]);
+ bitslice_t filter2 = f_c_bs(filter2_0, filter2_1, filter2_2, filter2_3, filter2_4);
+ bitslice_t results2 = results1 & (filter2 ^ keystream[2]);
+ if((results2 == 0u)) continue;
+ state[-2+50] = lfsr_bs(2);
+ bitslice_t filter3_3 = f_b_bs(state[-2+31],state[-2+32],state[-2+34],state[-2+36]);
+ bitslice_t filter4_0 = f_a_bs(state[-2+6],state[-2+7],state[-2+9],state[-2+10]);
+ bitslice_t filter4_1 = f_b_bs(state[-2+12],state[-2+16],state[-2+18],state[-2+19]);
+ bitslice_t filter4_2 = f_b_bs(state[-2+21],state[-2+25],state[-2+27],state[-2+30]);
+ bitslice_t filter7_0 = f_a_bs(state[-2+9],state[-2+10],state[-2+12],state[-2+13]);
+ bitslice_t filter7_1 = f_b_bs(state[-2+15],state[-2+19],state[-2+21],state[-2+22]);
+ bitslice_t filter8_2 = f_b_bs(state[-2+25],state[-2+29],state[-2+31],state[-2+34]);
+ bitslice_t filter10_1 = f_b_bs(state[-2+18],state[-2+22],state[-2+24],state[-2+25]);
+ bitslice_t filter10_2 = f_b_bs(state[-2+27],state[-2+31],state[-2+33],state[-2+36]);
+ bitslice_t filter11_1 = f_b_bs(state[-2+19],state[-2+23],state[-2+25],state[-2+26]);
+ bitslice_t filter13_0 = f_a_bs(state[-2+15],state[-2+16],state[-2+18],state[-2+19]);
+ bitslice_t filter13_1 = f_b_bs(state[-2+21],state[-2+25],state[-2+27],state[-2+28]);
+ bitslice_t filter16_0 = f_a_bs(state[-2+18],state[-2+19],state[-2+21],state[-2+22]);
+ bitslice_t filter16_3 = f_b_bs(state[-2+44],state[-2+45],state[-2+47],state[-2+49]);
+ bitslice_t filter17_1 = f_b_bs(state[-2+25],state[-2+29],state[-2+31],state[-2+32]);
+ bitslice_t filter17_3 = f_b_bs(state[-2+45],state[-2+46],state[-2+48],state[-2+50]);
+ for(uint i3 = 0u; i3 < (1u<<3);){
+ state[-2+11] = HITAG2HELL_NEGBOOL(i3 & 0x1u);
+ state[-2+20] = HITAG2HELL_NEGBOOL(i3 & 0x2u);
+ state[-2+37] = HITAG2HELL_NEGBOOL(i3 & 0x4u);
+ i3++;
+ // 0xff07ffffffffu
+ bitslice_t filter3_1 = f_b_bs(state[-2+11],state[-2+15],state[-2+17],state[-2+18]);
+ bitslice_t filter3_2 = f_b_bs(state[-2+20],state[-2+24],state[-2+26],state[-2+29]);
+ bitslice_t filter3_4 = f_a_bs(state[-2+37],state[-2+46],state[-2+47],state[-2+49]);
+ bitslice_t filter3 = f_c_bs(filter3_0, filter3_1, filter3_2, filter3_3, filter3_4);
+ bitslice_t results3 = results2 & (filter3 ^ keystream[3]);
+ if((results3 == 0u)) continue;
+ state[-2+51] = lfsr_bs(3);
+ state[-2+52] = lfsr_bs(4);
+ state[-2+53] = lfsr_bs(5);
+ state[-2+54] = lfsr_bs(6);
+ state[-2+55] = lfsr_bs(7);
+ bitslice_t filter4_3 = f_b_bs(state[-2+32],state[-2+33],state[-2+35],state[-2+37]);
+ bitslice_t filter5_0 = f_a_bs(state[-2+7],state[-2+8],state[-2+10],state[-2+11]);
+ bitslice_t filter5_1 = f_b_bs(state[-2+13],state[-2+17],state[-2+19],state[-2+20]);
+ bitslice_t filter6_0 = f_a_bs(state[-2+8],state[-2+9],state[-2+11],state[-2+12]);
+ bitslice_t filter6_1 = f_b_bs(state[-2+14],state[-2+18],state[-2+20],state[-2+21]);
+ bitslice_t filter8_0 = f_a_bs(state[-2+10],state[-2+11],state[-2+13],state[-2+14]);
+ bitslice_t filter8_1 = f_b_bs(state[-2+16],state[-2+20],state[-2+22],state[-2+23]);
+ bitslice_t filter9_0 = f_a_bs(state[-2+11],state[-2+12],state[-2+14],state[-2+15]);
+ bitslice_t filter9_4 = f_a_bs(state[-2+43],state[-2+52],state[-2+53],state[-2+55]);
+ bitslice_t filter11_2 = f_b_bs(state[-2+28],state[-2+32],state[-2+34],state[-2+37]);
+ bitslice_t filter12_1 = f_b_bs(state[-2+20],state[-2+24],state[-2+26],state[-2+27]);
+ bitslice_t filter14_0 = f_a_bs(state[-2+16],state[-2+17],state[-2+19],state[-2+20]);
+ bitslice_t filter15_0 = f_a_bs(state[-2+17],state[-2+18],state[-2+20],state[-2+21]);
+ bitslice_t filter17_0 = f_a_bs(state[-2+19],state[-2+20],state[-2+22],state[-2+23]);
+ for(uint i4 = 0u; i4 < (1u<<1);){
+ state[-2+38] = HITAG2HELL_NEGBOOL(i4);
+ i4++;
+ // 0xff87ffffffffu
+ bitslice_t filter4_4 = f_a_bs(state[-2+38],state[-2+47],state[-2+48],state[-2+50]);
+ bitslice_t filter4 = f_c_bs(filter4_0, filter4_1, filter4_2, filter4_3, filter4_4);
+ bitslice_t results4 = results3 & (filter4 ^ keystream[4]);
+ if((results4 == 0u)) continue;
+ state[-2+56] = lfsr_bs(8);
+ bitslice_t filter5_3 = f_b_bs(state[-2+33],state[-2+34],state[-2+36],state[-2+38]);
+ bitslice_t filter10_4 = f_a_bs(state[-2+44],state[-2+53],state[-2+54],state[-2+56]);
+ bitslice_t filter12_2 = f_b_bs(state[-2+29],state[-2+33],state[-2+35],state[-2+38]);
+ for(uint i5 = 0u; i5 < (1u<<1);){
+ state[-2+39] = HITAG2HELL_NEGBOOL(i5);
+ i5++;
+ // 0xffc7ffffffffu
+ bitslice_t filter5_4 = f_a_bs(state[-2+39],state[-2+48],state[-2+49],state[-2+51]);
+ bitslice_t filter5 = f_c_bs(filter5_0, filter5_1, filter5_2, filter5_3, filter5_4);
+ bitslice_t results5 = results4 & (filter5 ^ keystream[5]);
+ if((results5 == 0u)) continue;
+ state[-2+57] = lfsr_bs(9);
+ bitslice_t filter6_3 = f_b_bs(state[-2+34],state[-2+35],state[-2+37],state[-2+39]);
+ bitslice_t filter11_4 = f_a_bs(state[-2+45],state[-2+54],state[-2+55],state[-2+57]);
+ bitslice_t filter13_2 = f_b_bs(state[-2+30],state[-2+34],state[-2+36],state[-2+39]);
+ for(uint i6 = 0u; i6 < (1u<<1);){
+ state[-2+40] = HITAG2HELL_NEGBOOL(i6);
+ i6++;
+ // 0xffe7ffffffffu
+ bitslice_t filter6_4 = f_a_bs(state[-2+40],state[-2+49],state[-2+50],state[-2+52]);
+ bitslice_t filter6 = f_c_bs(filter6_0, filter6_1, filter6_2, filter6_3, filter6_4);
+ bitslice_t results6 = results5 & (filter6 ^ keystream[6]);
+ if((results6 == 0u)) continue;
+ state[-2+58] = lfsr_bs(10);
+ bitslice_t filter7_3 = f_b_bs(state[-2+35],state[-2+36],state[-2+38],state[-2+40]);
+ bitslice_t filter12_4 = f_a_bs(state[-2+46],state[-2+55],state[-2+56],state[-2+58]);
+ bitslice_t filter14_2 = f_b_bs(state[-2+31],state[-2+35],state[-2+37],state[-2+40]);
+ bitslice_t filter17_2 = f_b_bs(state[-2+34],state[-2+38],state[-2+40],state[-2+43]);
+  for(uint i7 = 0u; i7 < (1u<<1);){
+ state[-2+41] = HITAG2HELL_NEGBOOL(i7);
+ i7++;
+ // 0xfff7ffffffffu
+ bitslice_t filter7_4 = f_a_bs(state[-2+41],state[-2+50],state[-2+51],state[-2+53]);
+ bitslice_t filter7 = f_c_bs(filter7_0, filter7_1, filter7_2, filter7_3, filter7_4);
+ bitslice_t results7 = results6 & (filter7 ^ keystream[7]);
+ if((results7 == 0u)) continue;
+ state[-2+59] = lfsr_bs(11);
+ bitslice_t filter8_3 = f_b_bs(state[-2+36],state[-2+37],state[-2+39],state[-2+41]);
+ bitslice_t filter10_3 = f_b_bs(state[-2+38],state[-2+39],state[-2+41],state[-2+43]);
+ bitslice_t filter10 = f_c_bs(filter10_0, filter10_1, filter10_2, filter10_3, filter10_4);
+ bitslice_t filter12_3 = f_b_bs(state[-2+40],state[-2+41],state[-2+43],state[-2+45]);
+ bitslice_t filter12 = f_c_bs(filter12_0, filter12_1, filter12_2, filter12_3, filter12_4);
+ bitslice_t filter13_4 = f_a_bs(state[-2+47],state[-2+56],state[-2+57],state[-2+59]);
+ bitslice_t filter15_2 = f_b_bs(state[-2+32],state[-2+36],state[-2+38],state[-2+41]);
+  for(uint i8 = 0u; i8 < (1u<<1);){
+ state[-2+42] = HITAG2HELL_NEGBOOL(i8);
+ i8++;
+ // 0xffffffffffffu
+ bitslice_t filter8_4 = f_a_bs(state[-2+42],state[-2+51],state[-2+52],state[-2+54]);
+ bitslice_t filter8 = f_c_bs(filter8_0, filter8_1, filter8_2, filter8_3, filter8_4);
+ bitslice_t results8 = results7 & (filter8 ^ keystream[8]);
+ if((results8 == 0u)) continue;
+ bitslice_t filter9_3 = f_b_bs(state[-2+37],state[-2+38],state[-2+40],state[-2+42]);
+ bitslice_t filter9 = f_c_bs(filter9_0, filter9_1, filter9_2, filter9_3, filter9_4);
+ results8 &= (filter9 ^ keystream[9]);
+ if((results8 == 0u)) continue;
+ results8 &= (filter10 ^ keystream[10]);
+ if((results8 == 0u)) continue;
+ bitslice_t filter11_3 = f_b_bs(state[-2+39],state[-2+40],state[-2+42],state[-2+44]);
+ bitslice_t filter11 = f_c_bs(filter11_0, filter11_1, filter11_2, filter11_3, filter11_4);
+ results8 &= (filter11 ^ keystream[11]);
+ if((results8 == 0u)) continue;
+ results8 &= (filter12 ^ keystream[12]);
+ if((results8 == 0u)) continue;
+ bitslice_t filter13_3 = f_b_bs(state[-2+41],state[-2+42],state[-2+44],state[-2+46]);
+ bitslice_t filter13 = f_c_bs(filter13_0, filter13_1, filter13_2, filter13_3, filter13_4);
+ results8 &= (filter13 ^ keystream[13]);
+ if((results8 == 0u)) continue;
+ state[-2+60] = lfsr_bs(12);
+ bitslice_t filter14_3 = f_b_bs(state[-2+42],state[-2+43],state[-2+45],state[-2+47]);
+ bitslice_t filter14_4 = f_a_bs(state[-2+48],state[-2+57],state[-2+58],state[-2+60]);
+ bitslice_t filter14 = f_c_bs(filter14_0, filter14_1, filter14_2, filter14_3, filter14_4);
+ results8 &= (filter14 ^ keystream[14]);
+ if((results8 == 0u)) continue;
+ state[-2+61] = lfsr_bs(13);
+ bitslice_t filter15_4 = f_a_bs(state[-2+49],state[-2+58],state[-2+59],state[-2+61]);
+ bitslice_t filter15 = f_c_bs(filter15_0, filter15_1, filter15_2, filter15_3, filter15_4);
+ results8 &= (filter15 ^ keystream[15]);
+ if((results8 == 0u)) continue;
+ state[-2+62] = lfsr_bs(14);
+ bitslice_t filter16_2 = f_b_bs(state[-2+33],state[-2+37],state[-2+39],state[-2+42]);
+ bitslice_t filter16_4 = f_a_bs(state[-2+50],state[-2+59],state[-2+60],state[-2+62]);
+ bitslice_t filter16 = f_c_bs(filter16_0, filter16_1, filter16_2, filter16_3, filter16_4);
+ results8 &= (filter16 ^ keystream[16]);
+ if((results8 == 0u)) continue;
+ state[-2+63] = lfsr_bs(15);
+ bitslice_t filter17_4 = f_a_bs(state[-2+51],state[-2+60],state[-2+61],state[-2+63]);
+ bitslice_t filter17 = f_c_bs(filter17_0, filter17_1, filter17_2, filter17_3, filter17_4);
+ results8 &= (filter17 ^ keystream[17]);
+ if((results8 == 0u)) continue;
+ state[-2+64] = lfsr_bs(16);
+ bitslice_t filter18_0 = f_a_bs(state[-2+20],state[-2+21],state[-2+23],state[-2+24]);
+ bitslice_t filter18_1 = f_b_bs(state[-2+26],state[-2+30],state[-2+32],state[-2+33]);
+ bitslice_t filter18_2 = f_b_bs(state[-2+35],state[-2+39],state[-2+41],state[-2+44]);
+ bitslice_t filter18_3 = f_b_bs(state[-2+46],state[-2+47],state[-2+49],state[-2+51]);
+ bitslice_t filter18_4 = f_a_bs(state[-2+52],state[-2+61],state[-2+62],state[-2+64]);
+ bitslice_t filter18 = f_c_bs(filter18_0, filter18_1, filter18_2, filter18_3, filter18_4);
+ results8 &= (filter18 ^ keystream[18]);
+ if((results8 == 0u)) continue;
+ state[-2+65] = lfsr_bs(17);
+ bitslice_t filter19_0 = f_a_bs(state[-2+21],state[-2+22],state[-2+24],state[-2+25]);
+ bitslice_t filter19_1 = f_b_bs(state[-2+27],state[-2+31],state[-2+33],state[-2+34]);
+ bitslice_t filter19_2 = f_b_bs(state[-2+36],state[-2+40],state[-2+42],state[-2+45]);
+ bitslice_t filter19_3 = f_b_bs(state[-2+47],state[-2+48],state[-2+50],state[-2+52]);
+ bitslice_t filter19_4 = f_a_bs(state[-2+53],state[-2+62],state[-2+63],state[-2+65]);
+ bitslice_t filter19 = f_c_bs(filter19_0, filter19_1, filter19_2, filter19_3, filter19_4);
+ results8 &= (filter19 ^ keystream[19]);
+ if((results8 == 0u)) continue;
+ state[-2+66] = lfsr_bs(18);
+ bitslice_t filter20_0 = f_a_bs(state[-2+22],state[-2+23],state[-2+25],state[-2+26]);
+ bitslice_t filter20_1 = f_b_bs(state[-2+28],state[-2+32],state[-2+34],state[-2+35]);
+ bitslice_t filter20_2 = f_b_bs(state[-2+37],state[-2+41],state[-2+43],state[-2+46]);
+ bitslice_t filter20_3 = f_b_bs(state[-2+48],state[-2+49],state[-2+51],state[-2+53]);
+ bitslice_t filter20_4 = f_a_bs(state[-2+54],state[-2+63],state[-2+64],state[-2+66]);
+ bitslice_t filter20 = f_c_bs(filter20_0, filter20_1, filter20_2, filter20_3, filter20_4);
+ results8 &= (filter20 ^ keystream[20]);
+ if((results8 == 0u)) continue;
+ state[-2+67] = lfsr_bs(19);
+ bitslice_t filter21_0 = f_a_bs(state[-2+23],state[-2+24],state[-2+26],state[-2+27]);
+ bitslice_t filter21_1 = f_b_bs(state[-2+29],state[-2+33],state[-2+35],state[-2+36]);
+ bitslice_t filter21_2 = f_b_bs(state[-2+38],state[-2+42],state[-2+44],state[-2+47]);
+ bitslice_t filter21_3 = f_b_bs(state[-2+49],state[-2+50],state[-2+52],state[-2+54]);
+ bitslice_t filter21_4 = f_a_bs(state[-2+55],state[-2+64],state[-2+65],state[-2+67]);
+ bitslice_t filter21 = f_c_bs(filter21_0, filter21_1, filter21_2, filter21_3, filter21_4);
+ results8 &= (filter21 ^ keystream[21]);
+ if((results8 == 0u)) continue;
+ state[-2+68] = lfsr_bs(20);
+ bitslice_t filter22_0 = f_a_bs(state[-2+24],state[-2+25],state[-2+27],state[-2+28]);
+ bitslice_t filter22_1 = f_b_bs(state[-2+30],state[-2+34],state[-2+36],state[-2+37]);
+ bitslice_t filter22_2 = f_b_bs(state[-2+39],state[-2+43],state[-2+45],state[-2+48]);
+ bitslice_t filter22_3 = f_b_bs(state[-2+50],state[-2+51],state[-2+53],state[-2+55]);
+ bitslice_t filter22_4 = f_a_bs(state[-2+56],state[-2+65],state[-2+66],state[-2+68]);
+ bitslice_t filter22 = f_c_bs(filter22_0, filter22_1, filter22_2, filter22_3, filter22_4);
+ results8 &= (filter22 ^ keystream[22]);
+ if((results8 == 0u)) continue;
+ state[-2+69] = lfsr_bs(21);
+ bitslice_t filter23_0 = f_a_bs(state[-2+25],state[-2+26],state[-2+28],state[-2+29]);
+ bitslice_t filter23_1 = f_b_bs(state[-2+31],state[-2+35],state[-2+37],state[-2+38]);
+ bitslice_t filter23_2 = f_b_bs(state[-2+40],state[-2+44],state[-2+46],state[-2+49]);
+ bitslice_t filter23_3 = f_b_bs(state[-2+51],state[-2+52],state[-2+54],state[-2+56]);
+ bitslice_t filter23_4 = f_a_bs(state[-2+57],state[-2+66],state[-2+67],state[-2+69]);
+ bitslice_t filter23 = f_c_bs(filter23_0, filter23_1, filter23_2, filter23_3, filter23_4);
+ results8 &= (filter23 ^ keystream[23]);
+ if((results8 == 0u)) continue;
+ state[-2+70] = lfsr_bs(22);
+ bitslice_t filter24_0 = f_a_bs(state[-2+26],state[-2+27],state[-2+29],state[-2+30]);
+ bitslice_t filter24_1 = f_b_bs(state[-2+32],state[-2+36],state[-2+38],state[-2+39]);
+ bitslice_t filter24_2 = f_b_bs(state[-2+41],state[-2+45],state[-2+47],state[-2+50]);
+ bitslice_t filter24_3 = f_b_bs(state[-2+52],state[-2+53],state[-2+55],state[-2+57]);
+ bitslice_t filter24_4 = f_a_bs(state[-2+58],state[-2+67],state[-2+68],state[-2+70]);
+ bitslice_t filter24 = f_c_bs(filter24_0, filter24_1, filter24_2, filter24_3, filter24_4);
+ results8 &= (filter24 ^ keystream[24]);
+ if((results8 == 0u)) continue;
+ state[-2+71] = lfsr_bs(23);
+ bitslice_t filter25_0 = f_a_bs(state[-2+27],state[-2+28],state[-2+30],state[-2+31]);
+ bitslice_t filter25_1 = f_b_bs(state[-2+33],state[-2+37],state[-2+39],state[-2+40]);
+ bitslice_t filter25_2 = f_b_bs(state[-2+42],state[-2+46],state[-2+48],state[-2+51]);
+ bitslice_t filter25_3 = f_b_bs(state[-2+53],state[-2+54],state[-2+56],state[-2+58]);
+ bitslice_t filter25_4 = f_a_bs(state[-2+59],state[-2+68],state[-2+69],state[-2+71]);
+ bitslice_t filter25 = f_c_bs(filter25_0, filter25_1, filter25_2, filter25_3, filter25_4);
+ results8 &= (filter25 ^ keystream[25]);
+ if((results8 == 0u)) continue;
+ state[-2+72] = lfsr_bs(24);
+ bitslice_t filter26_0 = f_a_bs(state[-2+28],state[-2+29],state[-2+31],state[-2+32]);
+ bitslice_t filter26_1 = f_b_bs(state[-2+34],state[-2+38],state[-2+40],state[-2+41]);
+ bitslice_t filter26_2 = f_b_bs(state[-2+43],state[-2+47],state[-2+49],state[-2+52]);
+ bitslice_t filter26_3 = f_b_bs(state[-2+54],state[-2+55],state[-2+57],state[-2+59]);
+ bitslice_t filter26_4 = f_a_bs(state[-2+60],state[-2+69],state[-2+70],state[-2+72]);
+ bitslice_t filter26 = f_c_bs(filter26_0, filter26_1, filter26_2, filter26_3, filter26_4);
+ results8 &= (filter26 ^ keystream[26]);
+ if((results8 == 0u)) continue;
+ state[-2+73] = lfsr_bs(25);
+ bitslice_t filter27_0 = f_a_bs(state[-2+29],state[-2+30],state[-2+32],state[-2+33]);
+ bitslice_t filter27_1 = f_b_bs(state[-2+35],state[-2+39],state[-2+41],state[-2+42]);
+ bitslice_t filter27_2 = f_b_bs(state[-2+44],state[-2+48],state[-2+50],state[-2+53]);
+ bitslice_t filter27_3 = f_b_bs(state[-2+55],state[-2+56],state[-2+58],state[-2+60]);
+ bitslice_t filter27_4 = f_a_bs(state[-2+61],state[-2+70],state[-2+71],state[-2+73]);
+ bitslice_t filter27 = f_c_bs(filter27_0, filter27_1, filter27_2, filter27_3, filter27_4);
+ results8 &= (filter27 ^ keystream[27]);
+ if((results8 == 0u)) continue;
+ state[-2+74] = lfsr_bs(26);
+ bitslice_t filter28_0 = f_a_bs(state[-2+30],state[-2+31],state[-2+33],state[-2+34]);
+ bitslice_t filter28_1 = f_b_bs(state[-2+36],state[-2+40],state[-2+42],state[-2+43]);
+ bitslice_t filter28_2 = f_b_bs(state[-2+45],state[-2+49],state[-2+51],state[-2+54]);
+ bitslice_t filter28_3 = f_b_bs(state[-2+56],state[-2+57],state[-2+59],state[-2+61]);
+ bitslice_t filter28_4 = f_a_bs(state[-2+62],state[-2+71],state[-2+72],state[-2+74]);
+ bitslice_t filter28 = f_c_bs(filter28_0, filter28_1, filter28_2, filter28_3, filter28_4);
+ results8 &= (filter28 ^ keystream[28]);
+ if((results8 == 0u)) continue;
+ state[-2+75] = lfsr_bs(27);
+ bitslice_t filter29_0 = f_a_bs(state[-2+31],state[-2+32],state[-2+34],state[-2+35]);
+ bitslice_t filter29_1 = f_b_bs(state[-2+37],state[-2+41],state[-2+43],state[-2+44]);
+ bitslice_t filter29_2 = f_b_bs(state[-2+46],state[-2+50],state[-2+52],state[-2+55]);
+ bitslice_t filter29_3 = f_b_bs(state[-2+57],state[-2+58],state[-2+60],state[-2+62]);
+ bitslice_t filter29_4 = f_a_bs(state[-2+63],state[-2+72],state[-2+73],state[-2+75]);
+ bitslice_t filter29 = f_c_bs(filter29_0, filter29_1, filter29_2, filter29_3, filter29_4);
+ results8 &= (filter29 ^ keystream[29]);
+ if((results8 == 0u)) continue;
+ state[-2+76] = lfsr_bs(28);
+ bitslice_t filter30_0 = f_a_bs(state[-2+32],state[-2+33],state[-2+35],state[-2+36]);
+ bitslice_t filter30_1 = f_b_bs(state[-2+38],state[-2+42],state[-2+44],state[-2+45]);
+ bitslice_t filter30_2 = f_b_bs(state[-2+47],state[-2+51],state[-2+53],state[-2+56]);
+ bitslice_t filter30_3 = f_b_bs(state[-2+58],state[-2+59],state[-2+61],state[-2+63]);
+ bitslice_t filter30_4 = f_a_bs(state[-2+64],state[-2+73],state[-2+74],state[-2+76]);
+ bitslice_t filter30 = f_c_bs(filter30_0, filter30_1, filter30_2, filter30_3, filter30_4);
+ results8 &= (filter30 ^ keystream[30]);
+ if((results8 == 0u)) continue;
+ state[-2+77] = lfsr_bs(29);
+ bitslice_t filter31_0 = f_a_bs(state[-2+33],state[-2+34],state[-2+36],state[-2+37]);
+ bitslice_t filter31_1 = f_b_bs(state[-2+39],state[-2+43],state[-2+45],state[-2+46]);
+ bitslice_t filter31_2 = f_b_bs(state[-2+48],state[-2+52],state[-2+54],state[-2+57]);
+ bitslice_t filter31_3 = f_b_bs(state[-2+59],state[-2+60],state[-2+62],state[-2+64]);
+ bitslice_t filter31_4 = f_a_bs(state[-2+65],state[-2+74],state[-2+75],state[-2+77]);
+ bitslice_t filter31 = f_c_bs(filter31_0, filter31_1, filter31_2, filter31_3, filter31_4);
+ results8 &= (filter31 ^ keystream[31]);
+ if((results8 == 0u)) continue;
+  uint match_index = 0u;
+ // Save results: 48-bit state -> (lo, hi) uint pair; host reassembles + inverts.
+ while((results8 != 0u) && (match_index < MAX_BITSLICES)){
+   uint shift = uint(31 - findMSB(results8)) + 1u;
+   match_index += shift;
+   uint slot = atomicAdd(matches_found, 1u);
+   if(slot < pc.matches_cap) {
+     uint bmask = 1u << (MAX_BITSLICES - match_index);
+     uint lo = 0u;
+     uint hi = 0u;
+     for(int bj = 31; bj >= 0; --bj) { lo = (lo << 1) | (((state[bj] & bmask) != 0u) ? 1u : 0u); }
+     for(int bj = 47; bj >= 32; --bj) { hi = (hi << 1) | (((state[bj] & bmask) != 0u) ? 1u : 0u); }
+     matches[2u * slot] = lo;
+     matches[2u * slot + 1u] = hi;
+   }
+   results8 <<= shift;
+ }
+ } // 8
+ } // 7
+ } // 6
+ } // 5
+ } // 4
+ } // 3
+ } // 2
+}

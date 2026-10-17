@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'package:qunleashed/components/pixel_font.dart';
-
 import '../../components/navigation.dart';
 import '../../components/open_url.dart';
 import '../../services/localization/l10n.dart';
@@ -155,7 +153,7 @@ class _AboutPageState extends State<AboutPage>
                       TextSpan(
                         text: 'FOR ',
                         style: TextStyle(
-                          fontFamily: kPixelFontFamily,
+                          fontFamily: 'Born2bSportyV2',
                           fontSize: titleSize * 0.38,
                           color: Colors.white,
                           height: 1.0,
@@ -164,7 +162,7 @@ class _AboutPageState extends State<AboutPage>
                       TextSpan(
                         text: 'FLIPPER ZERO',
                         style: TextStyle(
-                          fontFamily: kPixelFontFamily,
+                          fontFamily: 'Born2bSportyV2',
                           fontSize: titleSize * 0.38,
                           color: const Color(0xFFFF9700),
                           height: 1.0,
@@ -219,7 +217,7 @@ const _navBtns = <_Btn>[
 ];
 
 List<_Btn> _extraButtons(L10n s) => <_Btn>[
-  _Btn(s.aboutAppGithub, 'https://github.com/apfxtech/qUnleashed'),
+  _Btn(s.aboutAppGithub, 'https://github.com/apfxtech/DoctorMobile'),
   _Btn(
     s.aboutDonateFirmware,
     'https://github.com/DarkFlippers/unleashed-firmware/blob/dev/ReadMe.md#%EF%B8%8F-please-support-development-of-the-project',

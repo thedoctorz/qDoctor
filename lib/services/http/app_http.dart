@@ -7,8 +7,6 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../logging.dart';
-
 class AppHttpException implements Exception {
   AppHttpException(this.statusCode, this.url, [this.body]);
 
@@ -21,199 +19,19 @@ class AppHttpException implements Exception {
       'AppHttpException($statusCode, $url${body == null ? '' : ', $body'})';
 }
 
-/// One finished HTTP exchange, for whoever is recording them.
-///
-/// A value rather than a span, because `AppHttp` must not import the Sentry
-/// SDK - ADR 0013 §2 keeps that to one folder, and
-/// `test/sentry_import_guard_test.dart` holds it. `lib/services/telemetry/`
-/// turns these into spans.
-///
-/// Reported after the fact, which the SDK supports: `startChild` takes a
-/// `startTimestamp` and `finish` an `endTimestamp`, so a span recorded on the
-/// way out is timed exactly as one opened on the way in. That is what lets the
-/// seam be a plain callback instead of something that has to wrap the request.
-class HttpExchange {
-  const HttpExchange({
-    required this.method,
-    required this.uri,
-    required this.startedAt,
-    required this.endedAt,
-    this.status,
-    this.error,
-  });
-
-  final String method;
-
-  /// The full URL. The **query is not** removed here: this object never leaves
-  /// the device, and the recorder scrubs what it sends. Doing it here would
-  /// take the query out of a value a future consumer might legitimately want
-  /// whole.
-  final Uri uri;
-
-  final DateTime startedAt;
-  final DateTime endedAt;
-
-  /// The response status, or null when no response arrived - a DNS failure, a
-  /// refused connection, a timeout before headers. Absence is null rather than
-  /// `0`, ADR 0009.
-  final int? status;
-
-  /// What the exchange threw, or null when it did not.
-  final Object? error;
-
-  Duration get elapsed => endedAt.difference(startedAt);
-
-  bool get ok => error == null;
-}
-
-/// Where finished exchanges go, or nowhere.
-///
-/// Null until something installs one, like `LogService.keptSink` and
-/// `guardedFailureSink`: this file knows there may be a reader and nothing
-/// about who it is.
-typedef HttpExchangeSink = void Function(HttpExchange exchange);
-
 /// Single shared HTTP client for the whole app: connections are kept alive
 /// between requests instead of paying TCP+TLS setup per call. Never close it
 /// from feature code — page-level `close()` methods must only stop issuing
 /// new requests.
 class AppHttp {
-  /// Set by `lib/services/telemetry/` while reporting is on.
-  static HttpExchangeSink? exchangeSink;
-
-  /// Runs [exchange] and reports what it did, once.
-  ///
-  /// Wrapped at the methods that own a **complete** exchange - request and
-  /// body - rather than at [get], which hands the response back with the body
-  /// unread. A span measuring only time-to-headers would read as a 40 ms
-  /// firmware download, which is worse than no span. [get] stays unobserved
-  /// and says so.
-  ///
-  /// [exchange] is handed a `noteStatus` because the status is on the
-  /// response, which only the body knows about; a success otherwise reports no
-  /// code at all. On a failure the status is taken from an
-  /// [AppHttpException] when that is what was thrown, since by then the
-  /// response has gone.
-  ///
-  /// Zero cost with no sink: no clock is read and no object is built, which
-  /// matters because this is also the shape every local build has.
-  static Future<T> _observed<T>(
-    String method,
-    Uri uri,
-    Future<T> Function(void Function(int status) noteStatus) exchange,
-  ) async {
-    final sink = exchangeSink;
-    if (sink == null) return exchange(_ignoreStatus);
-
-    final startedAt = DateTime.now();
-    int? status;
-    final T ok;
-    try {
-      final value = await exchange((s) => status = s);
-      // Reported **outside** the try, below. Inside it, a throw from the
-      // reporter would be caught here, re-reported as the exchange's own
-      // failure and rethrown - turning a successful request into an exception
-      // the caller never expected, which is the one thing `_report`'s own doc
-      // says must not happen.
-      ok = value;
-    } catch (e) {
-      final code = e is AppHttpException ? e.statusCode : status;
-      _report(sink, method, uri, startedAt, code, e);
-      rethrow;
-    }
-    _report(sink, method, uri, startedAt, status, null);
-    return ok;
-  }
-
-  static void _ignoreStatus(int status) {}
-
-  /// Hands one exchange to the sink without letting it cost the request.
-  ///
-  /// The request has already succeeded or failed by the time this runs, and a
-  /// recorder that throws must not turn a good answer into an exception the
-  /// caller never expected. Reported through [LogService.warn] rather than
-  /// swallowed, because a sink that always throws is a reporting feature that
-  /// silently does nothing.
-  static void _report(
-    HttpExchangeSink sink,
-    String method,
-    Uri uri,
-    DateTime startedAt,
-    int? status,
-    Object? error,
-  ) {
-    try {
-      sink(
-        HttpExchange(
-          method: method,
-          uri: uri,
-          startedAt: startedAt,
-          endedAt: DateTime.now(),
-          status: status,
-          error: error,
-        ),
-      );
-    } catch (e) {
-      LogService.warn('[AppHttp] the exchange sink threw on $method $uri: $e');
-    }
-  }
-
   AppHttp._();
 
-  static const String userAgent = 'qunleashed-app';
+  static const String userAgent = 'doctormobile-app';
 
   static final io.HttpClient client = io.HttpClient()
     ..connectionTimeout = const Duration(seconds: 25)
     ..userAgent = userAgent;
 
-  /// How long a request may take to produce its response headers.
-  ///
-  /// [io.HttpClient.connectionTimeout] covers the TCP handshake and nothing
-  /// after it, so a server that accepts the connection and then says nothing
-  /// - a half-open corporate proxy, a captive portal that stalls past the
-  /// handshake, a blackholing mobile link - left every request pending for
-  /// the life of the process. `idleTimeout` does not close that: it only
-  /// reaps idle pooled connections. #130.
-  /// Shortened by tests, which cannot wait half a minute to watch a stall.
-  static Duration headersDeadline = const Duration(seconds: 30);
-
-  /// How long a response body may go without a byte before it is abandoned.
-  ///
-  /// Between chunks rather than in total, deliberately. Half the call sites
-  /// stream something large - a firmware `.tgz`, an IR library, an ATP
-  /// bundle - and any fixed total budget breaks those on a slow link, while
-  /// a stall is a stall whatever the size.
-  /// Shortened by tests, as [headersDeadline].
-  static Duration idleDeadline = const Duration(seconds: 30);
-
-  /// [stream] with [idleDeadline] applied.
-  ///
-  /// The error alone ends an `await for`: the loop throws on it and cancels
-  /// the subscription, so there is no sink left for the source to write to
-  /// afterwards.
-  /// Widens the element type to `List<int>`, which is safe only because
-  /// every caller binds a decoder to the result rather than transforming it.
-  ///
-  /// `stream.transform(utf8.decoder)` would cast the decoder to a transformer
-  /// over the stream's *runtime* element type, and the widening here leaves
-  /// that as whatever the response carried. Which clients hit it differs: a
-  /// real one does not, the mock `flutter_test` installs does - so #199 left
-  /// every widget test whose fetch reached that mock throwing a `TypeError`
-  /// where it had been given an `AppHttpException`, and nothing failed. See
-  /// [getJson] for the other half.
-  static Stream<List<int>> _untilStalled(Stream<List<int>> stream, Uri uri) =>
-      stream.timeout(
-        idleDeadline,
-        onTimeout: (sink) =>
-            sink.addError(TimeoutException('No data from $uri', idleDeadline)),
-      );
-
-  /// The raw exchange: the response is returned with its body unread.
-  ///
-  /// **Not observed.** The caller owns the body, so the only duration this
-  /// method could report is time-to-headers - see [_observed]. Every wrapper
-  /// below that reads a body is observed instead, so each exchange is counted
-  /// exactly once.
   static Future<io.HttpClientResponse> get(
     Uri uri, {
     Map<String, String> headers = const {},
@@ -222,43 +40,29 @@ class AppHttp {
     for (final entry in headers.entries) {
       req.headers.set(entry.key, entry.value);
     }
-    return req.close().timeout(
-      headersDeadline,
-      onTimeout: () {
-        // Aborted as well as abandoned: without this the socket stays open
-        // and the connection sits in the pool for the next caller to inherit.
-        req.abort();
-        throw TimeoutException('No response from $uri', headersDeadline);
-      },
-    );
+    return req.close();
   }
 
   static Future<dynamic> getJson(
     Uri uri, {
     Map<String, String> headers = const {},
-  }) => _observed('GET', uri, (noteStatus) async {
+  }) async {
     final res = await get(
       uri,
       headers: {io.HttpHeaders.acceptHeader: 'application/json', ...headers},
     );
-    noteStatus(res.statusCode);
-    // `utf8.decoder.bind(stream)` rather than `stream.transform(utf8.decoder)`.
-    // bind takes a `Stream<List<int>>` and a `Stream<Uint8List>` is one, so
-    // nothing is cast; transform goes the other way and casts the decoder to
-    // a transformer over the stream's runtime element type. See
-    // [_untilStalled].
-    final text = await utf8.decoder.bind(_untilStalled(res, uri)).join();
+    final text = await res.transform(utf8.decoder).join();
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw AppHttpException(res.statusCode, uri.toString(), text);
     }
     return _decodeText(text);
-  });
+  }
 
   static Future<dynamic> postJson(
     Uri uri,
     Object body, {
     Map<String, String> headers = const {},
-  }) => _observed('POST', uri, (noteStatus) async {
+  }) async {
     final req = await client.postUrl(uri);
     req.headers
       ..set(io.HttpHeaders.acceptHeader, 'application/json')
@@ -267,33 +71,19 @@ class AppHttp {
       req.headers.set(entry.key, entry.value);
     }
     req.write(jsonEncode(body));
-    final res = await req.close().timeout(
-      headersDeadline,
-      onTimeout: () {
-        req.abort();
-        throw TimeoutException('No response from $uri', headersDeadline);
-      },
-    );
-    noteStatus(res.statusCode);
-    final text = await utf8.decoder.bind(_untilStalled(res, uri)).join();
+    final res = await req.close();
+    final text = await res.transform(utf8.decoder).join();
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw AppHttpException(res.statusCode, uri.toString(), text);
     }
     return _decodeText(text);
-  });
+  }
 
   static io.Directory? _jsonCacheDir;
 
   /// The on-disk JSON HTTP cache directory (inside the app support container).
   /// Exposed so the Storage settings can report its size and clear it.
   static Future<io.Directory> httpCacheDirectory() => _ensureJsonCacheDir();
-
-  /// Puts both deadlines back to what a shipped build uses.
-  @visibleForTesting
-  static void debugResetDeadlines() {
-    headersDeadline = const Duration(seconds: 30);
-    idleDeadline = const Duration(seconds: 30);
-  }
 
   /// Points the cache at a directory of the caller's choosing.
   ///
@@ -331,13 +121,7 @@ class AppHttp {
       final key = sha256.convert(utf8.encode(uri.toString())).toString();
       paths = _CachePaths(dir, key);
       cached = await _JsonCacheEntry.read(paths);
-    } catch (e) {
-      // Everything below still works: `cached` stays null and the call goes
-      // to the network. What it costs is the offline copy - a user with no
-      // connection gets a network error where they had a screen - so the
-      // reason the cache was skipped is the one thing worth keeping.
-      LogService.warn('[Http] cache unreadable for $uri: $e');
-    }
+    } catch (_) {}
 
     if (cached != null && DateTime.now().difference(cached.fetchedAt) < ttl) {
       final hit = await _tryDecodeBodyFile(cached.bodyFile);
@@ -358,51 +142,35 @@ class AppHttp {
     String? freshEtag;
     io.File? unchanged;
     try {
-      // Observed around the request only, not around the whole method. A hit
-      // that never revalidates returns above this and makes no exchange, so
-      // there is nothing to report - a span for it would show the app talking
-      // to a server it did not touch. The cache reads and the isolate decode
-      // are outside it for the same reason: they are not the network.
-      //
-      // The stale-copy fallback below is outside too, so a failed exchange is
-      // reported as failed even when the caller is served from disk and never
-      // learns that anything went wrong. That is the case most worth seeing.
-      await _observed('GET', uri, (noteStatus) async {
-        // Re-read into a local: Dart will not promote a variable captured by
-        // a closure, so the `cached != null` test below would not carry to
-        // `cached.etag` without this.
-        final entry = cached;
-        final etag = entry?.etag ?? '';
-        final res = await get(
-          uri,
-          headers: {
-            io.HttpHeaders.acceptHeader: 'application/json',
-            if (etag.isNotEmpty) io.HttpHeaders.ifNoneMatchHeader: etag,
-            ...headers,
-          },
-        );
-        noteStatus(res.statusCode);
-        if (res.statusCode == io.HttpStatus.notModified && entry != null) {
-          await res.drain<void>();
-          // Only the timestamp moves, and it now lives in its own file - a 304
-          // used to rewrite the entire body to disk to re-stamp the TTL.
-          // A 304 should carry an ETag and servers do rotate weak validators,
-          // so re-stamping with the old one would keep revalidating against a
-          // validator the server has already moved past.
-          final rotated = res.headers.value(io.HttpHeaders.etagHeader);
-          if (paths != null) {
-            await _JsonCacheEntry.stamp(paths, rotated ?? entry.etag);
-          }
-          unchanged = entry.bodyFile;
-        } else {
-          final text = await utf8.decoder.bind(_untilStalled(res, uri)).join();
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            throw AppHttpException(res.statusCode, uri.toString(), text);
-          }
-          fresh = text;
-          freshEtag = res.headers.value(io.HttpHeaders.etagHeader) ?? '';
+      final etag = cached?.etag ?? '';
+      final res = await get(
+        uri,
+        headers: {
+          io.HttpHeaders.acceptHeader: 'application/json',
+          if (etag.isNotEmpty) io.HttpHeaders.ifNoneMatchHeader: etag,
+          ...headers,
+        },
+      );
+      if (res.statusCode == io.HttpStatus.notModified && cached != null) {
+        await res.drain<void>();
+        // Only the timestamp moves, and it now lives in its own file - a 304
+        // used to rewrite the entire body to disk to re-stamp the TTL.
+        // A 304 should carry an ETag and servers do rotate weak validators, so
+        // re-stamping with the old one would keep revalidating against a
+        // validator the server has already moved past.
+        final rotated = res.headers.value(io.HttpHeaders.etagHeader);
+        if (paths != null) {
+          await _JsonCacheEntry.stamp(paths, rotated ?? cached.etag);
         }
-      });
+        unchanged = cached.bodyFile;
+      } else {
+        final text = await res.transform(utf8.decoder).join();
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw AppHttpException(res.statusCode, uri.toString(), text);
+        }
+        fresh = text;
+        freshEtag = res.headers.value(io.HttpHeaders.etagHeader) ?? '';
+      }
     } catch (_) {
       // The stale copy is the answer to a network failure - but only if it
       // reads. If it does not, the caller needs the network error that sent us
@@ -427,12 +195,7 @@ class AppHttp {
       if (paths != null && body.isNotEmpty) {
         try {
           await _JsonCacheEntry.store(paths, etag: freshEtag ?? '', body: body);
-        } catch (e) {
-          // The answer is already on its way to the caller, so this is not a
-          // failure they see now. It is the one they see next time, offline,
-          // with nothing on disk and no record of why.
-          LogService.warn('[Http] could not cache $uri: $e');
-        }
+        } catch (_) {}
       }
       return decoded;
     }
@@ -492,31 +255,29 @@ class AppHttp {
     Uri uri, {
     Map<String, String> headers = const {},
     void Function(int received, int? total)? onProgress,
-  }) => _observed('GET', uri, (noteStatus) async {
+  }) async {
     final res = await get(uri, headers: headers);
-    noteStatus(res.statusCode);
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      final text = await utf8.decoder.bind(_untilStalled(res, uri)).join();
+      final text = await res.transform(utf8.decoder).join();
       throw AppHttpException(res.statusCode, uri.toString(), text);
     }
     final total = res.contentLength > 0 ? res.contentLength : null;
     final out = BytesBuilder(copy: false);
     onProgress?.call(0, total);
-    await for (final chunk in _untilStalled(res, uri)) {
+    await for (final chunk in res) {
       out.add(chunk);
       onProgress?.call(out.length, total);
     }
     return out.takeBytes();
-  });
+  }
 
   static Future<void> downloadToFile(
     Uri uri,
     String savePath, {
     Map<String, String> headers = const {},
     void Function(int received, int? total)? onProgress,
-  }) => _observed('GET', uri, (noteStatus) async {
+  }) async {
     final res = await get(uri, headers: headers);
-    noteStatus(res.statusCode);
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw AppHttpException(res.statusCode, uri.toString());
     }
@@ -525,7 +286,7 @@ class AppHttp {
     var received = 0;
     try {
       onProgress?.call(0, total);
-      await for (final chunk in _untilStalled(res, uri)) {
+      await for (final chunk in res) {
         sink.add(chunk);
         received += chunk.length;
         onProgress?.call(received, total);
@@ -534,7 +295,7 @@ class AppHttp {
     } finally {
       await sink.close();
     }
-  });
+  }
 }
 
 /// Reads and parses a JSON file. Runs inside a [compute] isolate, so it must
@@ -591,13 +352,7 @@ class _JsonCacheEntry {
           bodyFile: paths.body,
         );
       }
-    } catch (e) {
-      // A pair that is on disk and will not read: a meta file truncated by a
-      // process that died mid-write, or one this version no longer
-      // understands. Treating it as absent is right - the network still
-      // answers - but it is a cache that will fail this way every time until
-      // something overwrites it, and it used to say nothing.
-      LogService.warn('[Http] cache entry unreadable: $e');
+    } catch (_) {
       return null;
     }
     return _migrate(paths);
@@ -628,13 +383,7 @@ class _JsonCacheEntry {
       // call that already deleted it - must not discard the migrated entry.
       try {
         await paths.legacy.delete();
-      } catch (e) {
-        // Migrated and then not cleaned up. Harmless twice over - the new
-        // pair is on disk and the next migration finds nothing to do - but a
-        // file that will not delete is worth knowing about before the rest of
-        // the cache meets the same permission.
-        LogService.warn('[Http] left a migrated cache file behind: $e');
-      }
+      } catch (_) {}
       return _JsonCacheEntry(
         etag: etag,
         fetchedAt: DateTime.fromMillisecondsSinceEpoch(fetchedAtMs),

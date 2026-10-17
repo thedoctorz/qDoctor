@@ -3,7 +3,6 @@ import 'dart:typed_data';
 
 import '../../components/archive/category.dart';
 import '../../components/path.dart';
-import '../logging.dart';
 import '../storage/paths.dart';
 
 class LocalKeyEntry {
@@ -84,12 +83,7 @@ class ArchiveStorage {
       final root = await resolveRootDir();
       await root.create(recursive: true);
       await _lastDeviceFile().writeAsString(name);
-    } catch (e) {
-      // The app forgets which Flipper it was last on, so the next launch
-      // opens with no device and the archive with nothing in it. Nothing is
-      // waiting on this write, which is why it is warn rather than a surface.
-      LogService.warn('[Archive] could not remember the last device: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> _migrateLegacyLastDevice(io.File target) async {
@@ -168,13 +162,7 @@ class ArchiveStorage {
       await _mergeDirectory(entity, target);
       try {
         await entity.delete(recursive: true);
-      } catch (e) {
-        // Merged, then not removed: the files are in both places now, and the
-        // one left behind is what a user sees as a duplicate device folder.
-        LogService.warn(
-          '[Archive] merged "${entity.path}" but could not remove it: $e',
-        );
-      }
+      } catch (_) {}
     }
   }
 
@@ -243,14 +231,7 @@ class ArchiveStorage {
       final dir = deviceDir(deviceName);
       await dir.create(recursive: true);
       await _favoritesFile(deviceName).writeAsString(favorites.join('\n'));
-    } catch (e) {
-      // The star the user just tapped is on screen and will not be there on
-      // the next launch. Worth a line in a bug report that otherwise reads
-      // "favourites do not save".
-      LogService.warn(
-        '[Archive] could not save favourites for "$deviceName": $e',
-      );
-    }
+    } catch (_) {}
   }
 
   // ── Favorited apps (.fap) ────────────────────────────────────────────────
@@ -307,11 +288,7 @@ class ArchiveStorage {
       await dir.create(recursive: true);
       await _fapFavoritesFile(deviceName)
           .writeAsString(entries.map((e) => '${e.path}\t${e.name}').join('\n'));
-    } catch (e) {
-      LogService.warn(
-        '[Archive] could not save app favourites for "$deviceName": $e',
-      );
-    }
+    } catch (_) {}
   }
 
   Future<Uint8List?> readFapIcon(String deviceName, String remotePath) async {

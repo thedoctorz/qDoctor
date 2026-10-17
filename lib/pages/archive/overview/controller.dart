@@ -1,4 +1,3 @@
-import '../../../services/guarded.dart';
 import '../../../services/localization/l10n.dart';
 
 import 'dart:async';
@@ -21,6 +20,7 @@ import '../../../services/storage/fap_icons.dart' as icon_repo;
 import '../../../components/archive/models/fap.dart';
 import '../../../components/archive/models/key.dart';
 import '../../../services/logging.dart';
+import '../subghz_catalog.dart';
 
 enum SyncPhase { checking, downloading }
 
@@ -64,13 +64,9 @@ class _RemoteFile {
 }
 
 class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
-  /// [client] is the one the app resolved at its composition root.
-  ///
-  /// Required now. The fallback was there for `ArchivePage` building its own
-  /// controller, and that page is built in one place - `AppShell`, which has
-  /// the client the root handed it. ADR 0002.
-  ArchiveController({required this._client, ArchiveStorage? storage})
-    : _storage = storage ?? ArchiveStorage();
+  ArchiveController({FlipperClient? client, ArchiveStorage? storage})
+    : _client = client ?? FlipperOneClient().get(),
+      _storage = storage ?? ArchiveStorage();
 
   final FlipperClient _client;
   final ArchiveStorage _storage;
@@ -83,16 +79,24 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
   String? _busyPath;
   double _busyProgress = 0;
   String? _lastError;
-  String? _lastFailure;
-
-  /// The last file a download could not read, folded into the sync summary
-  /// below. Internal: it is not a second error field, it is one line of one.
   String? _lastReadError;
-
+  int _lastDownloadedOk = 0;
+  int _lastUpToDate = 0;
+  int _lastDownloadedTotal = 0;
   Set<String> _favorites = <String>{};
   List<FapFavorite> _fapFavorites = <FapFavorite>[];
 
   final Map<String, ArchiveKey> _keys = <String, ArchiveKey>{};
+
+  bool _subghzVerified = false;
+
+  int _keysEpoch = 0;
+
+  String _localsForDevice = '';
+  Future<void>? _initialized;
+  Future<void>? _refreshInFlight;
+  Future<void>? _subghzVerifyLock;
+  final Set<String> _pullingGaps = <String>{};
 
   StreamSubscription<FlipperConnectionState>? _connSub;
   StreamSubscription<Map<String, String>>? _deviceInfoSub;
@@ -109,19 +113,9 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       _busyPath == k.remotePath ? _busyProgress : null;
 
   String? get lastError => _lastError;
-
-  /// Why the thing the user just asked for did not happen.
-  ///
-  /// Separate from [lastError] because their lifetimes differ, and because
-  /// [lastError] has nowhere to be seen for most of what happens here: its
-  /// readers are the full-sync dialog and an empty-list subtitle, and a
-  /// rename or a delete that fails does not empty a list. Every one of these
-  /// operations also ends in a refresh, which clears [lastError] before
-  /// anything could have read it - so the failure reached nobody at all. #110.
-  ///
-  /// Cleared when the next operation starts, so a page reading it straight
-  /// after one is reading about that one.
-  String? get lastFailure => _lastFailure;
+  int get lastDownloadedOk => _lastDownloadedOk;
+  int get lastUpToDate => _lastUpToDate;
+  int get lastDownloadedTotal => _lastDownloadedTotal;
   String get deviceName => _deviceName;
   bool get isConnected => _client.isConnected;
   FlipperClient get client => _client;
@@ -179,13 +173,32 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     super.notifyListeners();
   }
 
-  Future<void> initialize() async {
+  Future<void> initialize() {
+    if (_initialized != null) return _initialized!;
+    _bindCatalog();
     WidgetsBinding.instance.addObserver(this);
     _connSub ??= _client.connectionStream.listen(_onConnectionChange);
     _deviceInfoSub ??= _client.deviceInfoUpdates.listen(_onDeviceInfo);
     _deviceName = _client.getName() ?? '';
+    _initialized = _finishInitialize();
+    return _initialized!;
+  }
+
+  Future<void> _finishInitialize() async {
     if (_deviceName.isEmpty) await _adoptLastDeviceName();
     await refresh();
+  }
+
+  void _bindCatalog() {
+    ArchiveCatalog.instance.attach(
+      owner: this,
+      read: () => subghzSync,
+      connected: () => isConnected,
+      warm: warmSubghzLocals,
+      ensure: ensureSubghzVerified,
+      pull: pullSubghzGaps,
+      mirror: mirrorSubghzFile,
+    );
   }
 
   /// Falls back to the name of the last connected device, so the archive of a
@@ -204,7 +217,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
-    unawaited(guarded('[Archive] retry device name', _retryLastDeviceName));
+    unawaited(_retryLastDeviceName());
   }
 
   Future<void> _retryLastDeviceName() async {
@@ -221,26 +234,12 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     final connected = s.connected && s.device != null;
     if (!connected) {
       _syncStatus = ArchiveSyncStatus.idle;
+      _subghzVerified = false;
     }
     notifyListeners();
   }
 
-  /// Runs [body] as one task, bound to the Flipper it starts against.
-  ///
-  /// Everything below is many device calls with waits between them - walking a
-  /// category, checking md5s, pulling what differs, writing back - all about
-  /// one Flipper's card. Bound, a sync that spans a device switch finishes on
-  /// the card it was reading; unbound, it would carry on comparing one
-  /// Flipper's files against another's and copy the difference between them.
-  ///
-  /// Not on the single-call operations: one request cannot be split across two
-  /// devices, because its session is resolved once, when it is sent.
-  Future<T> _task<T>(Future<T> Function() body) =>
-      _client.runTask(FlipperRequestPriority.background, body);
-
-  Future<void> fullSync() => _task(_fullSync);
-
-  Future<void> _fullSync() async {
+  Future<void> fullSync() async {
     final hasDeviceName = await _awaitRealDeviceName();
     if (!hasDeviceName) return;
     await syncAll();
@@ -270,12 +269,9 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       await _client.awaitDeviceInfo().timeout(
         const Duration(seconds: 20),
         onTimeout: () async {
-          // Ordinary, not foreground: this names the Flipper the sync is
-          // about, so it has to come from the one the sync is bound to and not
-          // from whichever is on screen when it answers.
           final response = await _client.deviceInfo(
             timeout: const Duration(seconds: 15),
-            priority: FlipperRequestPriority.unattended,
+            priority: FlipperRequestPriority.foreground,
           );
           return {
             for (final item in response.items)
@@ -286,7 +282,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       );
     } catch (e) {
       _lastError = '$e';
-      LogService.caught('[Archive] device metadata failed: $e');
+      LogService.info('[Archive] device metadata failed: $e');
       notifyListeners();
       return false;
     }
@@ -304,17 +300,14 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
   void _setDeviceName(String name) {
     if (name.isEmpty || _deviceName == name) return;
     _deviceName = name;
-    unawaited(
-      guarded(
-        '[Archive] remember device name',
-        () => _storage.writeLastDeviceName(name),
-      ),
-    );
+    _subghzVerified = false;
+    unawaited(_storage.writeLastDeviceName(name));
     notifyListeners();
   }
 
   @override
   void dispose() {
+    ArchiveCatalog.instance.detach(this);
     WidgetsBinding.instance.removeObserver(this);
     _connSub?.cancel();
     _deviceInfoSub?.cancel();
@@ -352,22 +345,14 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     return name;
   }
 
-  Future<void> toggleFavorite(ArchiveKey key) =>
-      _task(() => _toggleFavorite(key));
-
-  Future<void> _toggleFavorite(ArchiveKey key) async {
+  Future<void> toggleFavorite(ArchiveKey key) async {
     final keyId = _keyIdOf(key);
     if (_favorites.contains(keyId)) {
       _favorites.remove(keyId);
     } else {
       _favorites.add(keyId);
     }
-    unawaited(
-      guarded(
-        '[Archive] save favourites',
-        () => _storage.writeFavorites(_deviceName, _favorites),
-      ),
-    );
+    unawaited(_storage.writeFavorites(_deviceName, _favorites));
     final existing = _keys[keyId];
     if (existing != null) {
       _keys[keyId] = existing.copyWith(favorite: _favorites.contains(keyId));
@@ -375,13 +360,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  Future<void> setKeysFavorite(Iterable<ArchiveKey> keys, bool favorite) =>
-      _task(() => _setKeysFavorite(keys, favorite));
-
-  Future<void> _setKeysFavorite(
-    Iterable<ArchiveKey> keys,
-    bool favorite,
-  ) async {
+  Future<void> setKeysFavorite(Iterable<ArchiveKey> keys, bool favorite) async {
     var changed = false;
     for (final key in keys) {
       final keyId = _keyIdOf(key);
@@ -399,12 +378,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
     if (changed) {
-      unawaited(
-        guarded(
-          '[Archive] save favourites',
-          () => _storage.writeFavorites(_deviceName, _favorites),
-        ),
-      );
+      unawaited(_storage.writeFavorites(_deviceName, _favorites));
       notifyListeners();
     }
   }
@@ -420,7 +394,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _syncDeviceFavorites() async {
     const path = '/ext/favorites.txt';
-    final bytes = (await _readRemoteBytes(path)).bytes;
+    final bytes = await _readRemoteBytes(path, logErrors: false);
     if (bytes == null) {
       LogService.info('[Archive] $path is unavailable');
       return;
@@ -490,7 +464,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       if (icon == null) {
-        final bytes = (await _readRemoteBytes(remotePath)).bytes;
+        final bytes = await _readRemoteBytes(remotePath, logErrors: false);
         if (bytes != null) {
           final extracted = extractFapIcon(Uint8List.fromList(bytes));
           if (extracted != null) {
@@ -521,49 +495,9 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     [for (final f in _fapFavorites) (path: f.remotePath, name: f.name)],
   );
 
-  /// Paths with a launch in flight.
-  ///
-  /// `appStart` has a 15-second timeout and both pages that call this stay
-  /// interactive throughout, so a second tap on the same card started the app
-  /// twice and pushed two remote controls - which costs what `launchApp`'s own
-  /// guard describes. Here rather than in each page because the two pages that
-  /// launch a favourite - the archive overview and its favourites list - are
-  /// handed the *same* controller, so the window covers a second tap after
-  /// switching between them as well as two taps on one.
-  ///
-  /// Keyed on the path rather than a bare flag, for the reason the file manager
-  /// keys its own on one: launching two *different* apps in quick succession is
-  /// a thing a user does, and only the Flipper gets to refuse it. #244.
-  final Set<String> _launchingFaps = {};
-
   /// Starts a favorited app on the device by its full path. Returns whether the
   /// loader accepted the request; callers open the remote control on success.
-  ///
-  /// Null means a launch of this path is already under way and this call did
-  /// nothing: that first call owns the outcome, so a caller must report
-  /// neither success nor failure for this one.
-  Future<bool?> launchFapFavorite(FapFavorite fav) async {
-    if (!_launchingFaps.add(fav.remotePath)) {
-      // The caller shows nothing for a null, so without this the dropped tap
-      // is nowhere: not on screen, and not in a log a bug report could carry.
-      // It matters most when the page that asked first has since gone - then
-      // nobody reports the outcome at all.
-      LogService.caught(
-        '[Archive] launch ${fav.remotePath} ignored, one already in flight',
-      );
-      return null;
-    }
-    try {
-      return await _launchFapFavorite(fav);
-    } finally {
-      // Not notifyListeners: nothing on screen is drawn from this set. Cleared
-      // whatever happened, so a failed launch leaves the card tappable.
-      _launchingFaps.remove(fav.remotePath);
-    }
-  }
-
-  Future<bool> _launchFapFavorite(FapFavorite fav) async {
-    _lastFailure = null;
+  Future<bool> launchFapFavorite(FapFavorite fav) async {
     if (!_client.isConnected) return false;
     try {
       await _client.appStart(
@@ -572,11 +506,8 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       );
       return true;
     } catch (e) {
-      // The toast at the call site renders the reason, which is the surface
-      // this used to stand in for - and §5 is why that is no longer enough on
-      // its own: the reader who was missing is the developer.
-      _lastError = _lastFailure = '$e';
-      LogService.caught('[Archive] launch ${fav.remotePath} failed: $e');
+      _lastError = '$e';
+      LogService.info('[Archive] launch ${fav.remotePath} failed: $e');
       return false;
     }
   }
@@ -589,24 +520,14 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         .toList();
     notifyListeners();
     await _persistFapFavorites();
-    unawaited(
-      guarded(
-        '[Archive] delete app icon',
-        () => _storage.deleteFapIcon(_deviceName, fav.remotePath),
-      ),
-    );
-    unawaited(
-      guarded(
-        '[Archive] unfavourite on device',
-        () => _removeDeviceFavorite(fav.remotePath),
-      ),
-    );
+    unawaited(_storage.deleteFapIcon(_deviceName, fav.remotePath));
+    unawaited(_removeDeviceFavorite(fav.remotePath));
   }
 
   Future<void> _removeDeviceFavorite(String remotePath) async {
     if (!_client.isConnected) return;
     const favPath = '/ext/favorites.txt';
-    final bytes = (await _readRemoteBytes(favPath)).bytes;
+    final bytes = await _readRemoteBytes(favPath, logErrors: false);
     if (bytes == null) return;
     final target = _normalizeFavoritePath(remotePath);
     final lines = const Utf8Decoder(allowMalformed: true)
@@ -684,11 +605,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
 
   // ── Rename / Duplicate ─────────────────────────────────────────────────────
 
-  Future<void> renameKey(ArchiveKey key, String newName) =>
-      _task(() => _renameKey(key, newName));
-
-  Future<void> _renameKey(ArchiveKey key, String newName) async {
-    _lastFailure = null;
+  Future<void> renameKey(ArchiveKey key, String newName) async {
     if (newName.trim().isEmpty || newName == key.name) return;
     final keyId = _keyIdOf(key);
     final newFileName = '${newName.trim()}.${key.extension}';
@@ -728,12 +645,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         if (_favorites.contains(keyId)) {
           _favorites.remove(keyId);
           _favorites.add(newKeyId);
-          unawaited(
-            guarded(
-              '[Archive] save favourites',
-              () => _storage.writeFavorites(_deviceName, _favorites),
-            ),
-          );
+          unawaited(_storage.writeFavorites(_deviceName, _favorites));
         }
         _keys[newKeyId] = ArchiveKey(
           name: newName.trim(),
@@ -753,16 +665,13 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         );
       }
     } catch (e) {
-      _lastError = _lastFailure = '$e';
-      LogService.warn('[Archive] rename failed: $e');
+      _lastError = '$e';
+      LogService.info('[Archive] rename failed: $e');
     }
     notifyListeners();
   }
 
-  Future<void> duplicateKey(ArchiveKey key) => _task(() => _duplicateKey(key));
-
-  Future<void> _duplicateKey(ArchiveKey key) async {
-    _lastFailure = null;
+  Future<void> duplicateKey(ArchiveKey key) async {
     if (key.localPath == null) return;
     try {
       final existingNames = _keys.values
@@ -823,8 +732,8 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         flipperDir: key.flipperDir,
       );
     } catch (e) {
-      _lastError = _lastFailure = '$e';
-      LogService.warn('[Archive] duplicate failed: $e');
+      _lastError = '$e';
+      LogService.info('[Archive] duplicate failed: $e');
     }
     notifyListeners();
   }
@@ -843,9 +752,17 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
 
   // ── Refresh / Sync ─────────────────────────────────────────────────────────
 
-  Future<void> refresh() => _task(_refresh);
+  Future<void> refresh() {
+    final running = _refreshInFlight;
+    if (running != null) return running;
+    final started = _refreshBody();
+    _refreshInFlight = started;
+    return started.whenComplete(() {
+      if (identical(_refreshInFlight, started)) _refreshInFlight = null;
+    });
+  }
 
-  Future<void> _refresh() async {
+  Future<void> _refreshBody() async {
     if (_loading) return;
     _loading = true;
     _lastError = null;
@@ -854,6 +771,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       if (_deviceName.isEmpty) {
         _keys.clear();
         _fapFavorites = <FapFavorite>[];
+        _localsForDevice = '';
         if (_syncStatus == ArchiveSyncStatus.syncing) {
           _syncStatus = ArchiveSyncStatus.idle;
         }
@@ -865,14 +783,21 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       await _storage.ensureLayout(_deviceName);
       final localEntries = await _storage.listAll(_deviceName);
       final connected = _client.isConnected;
+      _keysEpoch++;
+      _subghzVerified = false;
       _keys.clear();
       for (final entry in localEntries) {
         _ingestLocal(entry);
       }
+      _localsForDevice = _deviceName;
       notifyListeners();
       if (!connected) return;
       for (final cat in ArchiveCategory.values) {
-        await _verifyCategory(cat);
+        if (cat == ArchiveCategory.subghz) {
+          await _verifySubghzShared(force: true);
+        } else {
+          await _verifyCategory(cat);
+        }
         notifyListeners();
       }
       _applyFavorites();
@@ -881,7 +806,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         _syncStatus = ArchiveSyncStatus.idle;
       }
       _lastError = '$e';
-      LogService.caught('[Archive] refresh failed: $e');
+      LogService.info('[Archive] refresh failed: $e');
     } finally {
       _loading = false;
       notifyListeners();
@@ -903,22 +828,25 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         seen.add(_ingestLocal(entry));
       }
       _keys.removeWhere((id, v) => v.category == cat && !seen.contains(id));
+      if (cat == ArchiveCategory.subghz) _localsForDevice = _deviceName;
       notifyListeners();
       if (!_client.isConnected) return;
-      await _verifyCategory(cat);
+      if (cat == ArchiveCategory.subghz) {
+        _subghzVerified = false;
+        await _verifySubghzShared(force: true);
+      } else {
+        await _verifyCategory(cat);
+      }
       notifyListeners();
       _applyFavorites();
       await _parseMetaForCategory(cat);
     } catch (e) {
       _lastError = '$e';
-      LogService.caught('[Archive] _refreshCategory $cat failed: $e');
+      LogService.info('[Archive] _refreshCategory $cat failed: $e');
     }
   }
 
-  Future<void> syncCategory(ArchiveCategory category) =>
-      _task(() => _syncCategory(category));
-
-  Future<void> _syncCategory(ArchiveCategory category) async {
+  Future<void> syncCategory(ArchiveCategory category) async {
     if (_syncing) return;
     if (!_client.isConnected || _deviceName.isEmpty) {
       await _refreshCategory(category);
@@ -949,7 +877,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (e) {
       _syncStatus = ArchiveSyncStatus.idle;
       _lastError = '$e';
-      LogService.caught('[Archive] syncCategory $category failed: $e');
+      LogService.info('[Archive] syncCategory $category failed: $e');
     } finally {
       _syncing = false;
       _syncProgress = null;
@@ -1006,30 +934,6 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
       ok = true;
-    } on FlipperRpcStorageNotExistException {
-      // A directory that is not there holds no files, which is an answer and
-      // not a failure: `remoteFiles` is already empty and the reconcile below
-      // is correct to run on it.
-      //
-      // This is the ordinary state of a Flipper nobody has wardriven with -
-      // `/ext/subghz/wardriving` and its `autosaved` are created by the app
-      // that writes them - so the `warn` below fired on a healthy device every
-      // time the category was opened. 22 of the 90 warnings the project sent
-      // in its first three days were these two paths.
-      //
-      // It also corrects the state, **for this one status**, that the comment
-      // below describes - and not in the way that comment's own case would
-      // have been corrected, which is worth being exact about. There the
-      // failure is a timeout and the reconcile would have put the synced keys
-      // back; here the listing succeeded in saying the directory is gone, so
-      // the reconcile marks the stale `local` keys `deleted` instead. The
-      // visible result is the opposite of the comment's: `isDeleted` removes
-      // emulate, send and plot from the sheet and offers restore, which is
-      // right for a file the device says it does not have. (`onDevice` is
-      // `state == synced`, so it reads false either way - the comment below
-      // overstates that part.) Every other list failure on this path still
-      // pays the cost the comment describes.
-      ok = true;
     } catch (e) {
       // Reached only for wardriving, the one category that is not searched
       // recursively - so this guard covers two scopes, and the unguarded
@@ -1046,23 +950,12 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       LogService.warn('[Archive] list $path failed: $e');
     }
     if (!ok) return;
-    final marked = _reconcileRemote(
+    _reconcileRemote(
       remoteFiles,
       (k) =>
           k.category == cat &&
           k.flipperDir == flipperDir &&
           k.subFolder == subFolder,
-    );
-    // Nothing is held back on this path - `ok` is false when anything was -
-    // so an empty listing is the whole of the condition here. The case this
-    // catches is the wardriving user whose `/ext/subghz/wardriving` has gone:
-    // all of their local captures move to Deleted, and without this nothing
-    // anywhere says why.
-    _reportBulkDelete(
-      cat,
-      flipperDir,
-      marked,
-      scopeWasAbsent: remoteFiles.isEmpty,
     );
   }
 
@@ -1071,122 +964,30 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     String flipperDir,
   ) async {
     final remoteFiles = <_RemoteFile>[];
-    final unread = <String>{};
-    await _collectRemoteFiles(
+    final ok = await _collectRemoteFiles(
       cat,
       flipperDir,
       ArchiveCategory.remoteDirOf(flipperDir),
       '',
       remoteFiles,
-      unread,
     );
-    if (unread.isNotEmpty) {
-      // Once for the walk, however many of its directories went unread -
-      // which is what the per-node line below cannot be, and the reason #111
-      // would not raise it. A walk over a whole SD card has hundreds of
-      // nodes, each with its own path and its own exception text, so nothing
-      // coalesces and a degrading link would evict the transport fault
-      // underneath it.
-      LogService.warn(
-        '[Archive] ${cat.name}: ${unread.length} folder(s) could not be '
-        'listed, so what is in them is left as it was',
-      );
+    if (!ok) {
+      if (cat == ArchiveCategory.subghz) _subghzVerified = false;
+      return;
     }
-    final marked = _reconcileRemote(
+    _reconcileRemote(
       remoteFiles,
-      (k) =>
-          k.category == cat &&
-          k.flipperDir == flipperDir &&
-          _wasWalked(k.subFolder, unread),
+      (k) => k.category == cat && k.flipperDir == flipperDir,
     );
-    _reportBulkDelete(
-      cat,
-      flipperDir,
-      marked,
-      scopeWasAbsent: remoteFiles.isEmpty && unread.isEmpty,
-    );
-  }
-
-  /// Records a whole scope moving to `deleted`, which otherwise happens in
-  /// silence.
-  ///
-  /// The per-node `ERROR_STORAGE_NOT_EXIST` is deliberately unlogged - a folder
-  /// a user's apps have never written to is absence, not failure, and that is
-  /// 13 of the warnings this branch removed. The **consequence** is a different
-  /// thing: when the absent directory is the root of the walk, `remoteFiles` is
-  /// empty, nothing is held back, and every local key under it is marked
-  /// deleted. That is #109's outcome reinstated for one status code, and the
-  /// argument for it is that the firmware looked and said there is no such
-  /// path.
-  ///
-  /// It is a good argument and it is not airtight. `ERROR_STORAGE_NOT_READY` is
-  /// a distinct code with its own exception, so an unmounted card does not
-  /// arrive here - but FatFS answers the same no-path condition for a `path`
-  /// that is a regular file, and these codes are a firmware contract this repo
-  /// does not own while the app ships against forks. A fork that resolves
-  /// mounts itself and answers NOT_EXIST where stock answers NOT_READY would
-  /// empty a user's category on every refresh. One line, at `caught` so it
-  /// survives a release build, is the difference between diagnosing that and
-  /// guessing.
-  ///
-  /// Only when it happened: nothing local means nothing marked, which is the
-  /// ordinary case the silence is for.
-  ///
-  /// [scopeWasAbsent] is a bool rather than the two collections it used to be
-  /// derived from. Neither was read for its contents, only for `isNotEmpty`,
-  /// and the two callers do not agree on what "the whole scope was absent"
-  /// means - the flat path has an `ok` flag, the recursive walk has an
-  /// `unread` set - so the caller that knows is the one that should say.
-  void _reportBulkDelete(
-    ArchiveCategory cat,
-    String flipperDir,
-    int marked, {
-    required bool scopeWasAbsent,
-  }) {
-    if (marked == 0 || !scopeWasAbsent) return;
-    LogService.caught(
-      '[Archive] ${cat.name}: ${ArchiveCategory.remoteDirOf(flipperDir)} '
-      'listed as not present, so $marked local file(s) now read as deleted',
-    );
-  }
-
-  /// Whether the walk actually got to see [subFolder], so that a key in it
-  /// missing from the listing means the file is gone rather than unread.
-  ///
-  /// A folder is walked unless its own listing failed or one above it did. A
-  /// folder that is simply not there any more passes, because every folder on
-  /// its path listed fine and none of them mentioned it - which is what makes
-  /// deleting a whole directory on the Flipper still read as deleted here.
-  ///
-  /// There is a second route to the same answer, added with the
-  /// `ERROR_STORAGE_NOT_EXIST` clause in [_collectRemoteFiles]: a folder whose
-  /// **own** listing raised that status is not added to [unread] either, so it
-  /// also passes. That is deliberate - the firmware looked and said the path is
-  /// not there - and it is the one case where passing here marks files deleted
-  /// on the strength of a status code rather than of a successful listing.
-  /// [_reportBulkDelete] is what makes it visible when it does.
-  ///
-  /// The root failing puts the empty string in [unread], and then nothing is
-  /// in scope at all. That is the case #109 was filed for: one `storageList`
-  /// that timed out marked every key in the category deleted.
-  static bool _wasWalked(String subFolder, Set<String> unread) {
-    for (final path in unread) {
-      if (path.isEmpty) return false;
-      if (path == subFolder || subFolder.startsWith('$path/')) return false;
+    if (cat == ArchiveCategory.subghz && _client.isConnected) {
+      _subghzVerified = true;
     }
-    return true;
   }
 
   /// Merges a freshly-listed set of [remoteFiles] into [_keys]: refreshes remote
   /// sizes/states for matched keys, adds remote-only keys, and marks in-scope
   /// local keys that vanished remotely as deleted (or drops them if device-only).
-  /// Returns how many in-scope local keys it marked deleted or dropped.
-  ///
-  /// Counted because the callers need it: an empty listing is indistinguishable
-  /// from a listing of a directory that is not there, and in the second case
-  /// this quietly moves every local key under it to `deleted`. A number here is
-  /// what lets them say so once, and only when it actually happened.
-  int _reconcileRemote(
+  void _reconcileRemote(
     List<_RemoteFile> remoteFiles,
     bool Function(ArchiveKey key) inScope,
   ) {
@@ -1220,35 +1021,24 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         );
       }
     }
-    var marked = 0;
     for (final entry in _keys.entries.toList()) {
       final key = entry.value;
       if (!inScope(key)) continue;
       if (seen.contains(entry.key)) continue;
-      marked++;
       if (!key.hasLocalFile) {
         _keys.remove(entry.key);
         continue;
       }
       _keys[entry.key] = key.copyWith(state: ArchiveKeyState.deleted);
     }
-    return marked;
   }
 
-  /// Walks [remotePath] and everything under it, adding what it finds to
-  /// [out] and the relative path of every folder it could not read to
-  /// [unread].
-  ///
-  /// The second one is the point: the caller reconciles what is on the device
-  /// against what is on the phone, and a folder it never saw is not a folder
-  /// whose files are gone.
-  Future<void> _collectRemoteFiles(
+  Future<bool> _collectRemoteFiles(
     ArchiveCategory cat,
     String flipperDir,
     String remotePath,
     String relPath,
     List<_RemoteFile> out,
-    Set<String> unread,
   ) async {
     try {
       final batch = await _client.storageList(
@@ -1261,14 +1051,14 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
           if (f.type == File_FileType.DIR) {
             if (cat.isIgnoredSubDir(name)) continue;
             final childRelPath = relPath.isEmpty ? name : '$relPath/$name';
-            await _collectRemoteFiles(
+            final childOk = await _collectRemoteFiles(
               cat,
               flipperDir,
               '$remotePath/$name',
               childRelPath,
               out,
-              unread,
             );
+            if (!childOk) return false;
           } else {
             final ext = cat.matchExtension(name);
             if (ext == null) continue;
@@ -1287,38 +1077,14 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
           }
         }
       }
-    } on FlipperRpcStorageNotExistException {
-      // Not added to [unread], which is the whole of this clause: a folder
-      // that is not there is not a folder whose contents are unknown, and
-      // holding it back would leave the keys under it exactly as they were -
-      // forever, on a device that is telling us plainly they are gone.
-      //
-      // The distinction this draws is the one #109 is about. A timeout says
-      // nothing about what is on the card, so the walk must not conclude the
-      // files were deleted. `ERROR_STORAGE_NOT_EXIST` says the opposite: the
-      // firmware looked and there is no such path. Treating the two the same
-      // is what put `badusb: 1 folder(s) could not be listed` in front of
-      // every user with no `/ext/badusb`, 13 times in three days, and held
-      // the category back each time.
-      //
-      // Unlogged for the same reason. The caller's per-walk `warn` counts
-      // [unread], so this clause takes the summary down with it when nothing
-      // was actually unreadable.
+      return true;
     } catch (e) {
-      unread.add(relPath);
-      // Stays at info, and now legitimately so: this is one node of a walk
-      // over a whole SD card, with its own path and its own exception text,
-      // so hundreds of them would not coalesce and would evict the transport
-      // fault underneath. The bounded record is the caller's, one per walk -
-      // which is what #109 unblocked. This one is the detail a talking build
-      // can still name the directory with.
       LogService.info('[Archive] list $remotePath failed: $e');
+      return false;
     }
   }
 
-  Future<void> syncAll() => _task(_syncAll);
-
-  Future<void> _syncAll() async {
+  Future<void> syncAll() async {
     if (_syncing) return;
     if (!_client.isConnected || _deviceName.isEmpty) {
       if (_syncStatus == ArchiveSyncStatus.syncing) {
@@ -1346,7 +1112,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (e) {
       _syncStatus = ArchiveSyncStatus.idle;
       _lastError = '$e';
-      LogService.caught('[Archive] sync failed: $e');
+      LogService.info('[Archive] sync failed: $e');
     } finally {
       _syncing = false;
       _syncProgress = null;
@@ -1381,12 +1147,10 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _downloadPending(List<String> pendingIds) async {
     var done = 0;
     var failed = 0;
-    // A bool and not the file it stopped at: that was always `done`, since
-    // nothing changes `done` after the `break`, so it was a second copy of a
-    // live variable that a reader had to prove could not diverge.
-    var stoppedEarly = false;
-    final byCause = <String, int>{};
     _lastReadError = null;
+    _lastDownloadedOk = 0;
+    _lastUpToDate = 0;
+    _lastDownloadedTotal = pendingIds.length;
     LogService.info(
       '[Archive] checking ${pendingIds.length} candidate file(s)',
     );
@@ -1406,6 +1170,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
 
       if (key.hasLocalFile && await _localMatchesRemote(key)) {
+        _lastUpToDate++;
         done++;
         notifyListeners();
         continue;
@@ -1429,85 +1194,21 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       publish(0);
-      var attempt = await _downloadAndApply(keyId, key, onProgress: publish);
-      // `storageReadChunked` has no restart of its own, unlike
-      // `storageWriteChunked`, so *this* read is lost. The **loop** is not,
-      // and that distinction is the whole of this branch: `isLinkDropError`
-      // is by its own definition the class an automatic reconnect makes whole
-      // again, auto-reconnect is on with a 600ms settle, and a settle landing
-      // mid-sync is ordinary on BLE. Breaking here abandoned the remaining
-      // two thousand files for a fault the transport was already repairing -
-      // CLAUDE.md's "a transfer restarts after the session is restored"
-      // pointed backwards.
-      //
-      // So wait the way the write path waits, and ask for the same file
-      // again; short-circuit, so a healthy read never reaches the wait. Only
-      // a session that does not come back ends the sync.
-      if (attempt.outcome == _Download.linkDropped &&
-          await _client.waitForRpcSession(const Duration(seconds: 30))) {
-        attempt = await _downloadAndApply(keyId, key, onProgress: publish);
-      }
-      if (attempt.outcome != _Download.saved) {
+      final ok = await _downloadAndApply(keyId, key, onProgress: publish);
+      if (ok) {
+        _lastDownloadedOk++;
+      } else {
         failed++;
-        // The shape of the failures, which is the diagnostic value the
-        // per-file lines used to carry: one slot would report whichever
-        // failure happened to be last, so a sync where forty files fail on a
-        // corrupting card and the forty-first fails benignly would name the
-        // benign one. Keyed on the exception, which is stable and
-        // locale-independent - the rendered line is neither.
-        if (attempt.error != null) {
-          byCause.update('${attempt.error}', (n) => n + 1, ifAbsent: () => 1);
-        }
       }
       done++;
       notifyListeners();
-      // Every remaining file would now fail instantly against a dead
-      // transport - 2267 outbound entries from one sync in the field, a burst
-      // that overflows the SDK's envelope cache and evicts the error events
-      // it was holding.
-      if (attempt.outcome == _Download.linkDropped) {
-        stoppedEarly = true;
-        break;
-      }
     }
-    // Three at most. The map is bounded by the number of distinct faults,
-    // which for `FlipperRpcException` is the status codes - but a
-    // `FileSystemException` carries its path, so the join is capped rather
-    // than the keys: this string reaches the UI.
-    final causes = byCause.entries
-        .take(3)
-        .map((e) => '${e.key} x${e.value}')
-        .join(', ');
-    final tail = causes.isEmpty ? '' : ' ($causes)';
-    if (stoppedEarly) {
-      // Reported as an outcome and not as a ratio. `done` as the total read
-      // "Downloaded 0/1; 1 failed" for a sync of two thousand files - tidy,
-      // and a claim that it finished; `pendingIds.length` alone called the
-      // files it never asked for "failed". Neither is what happened, so the
-      // truncation gets its own sentence and the queue keeps the denominator.
-      //
-      // The cause tail is appended here as well, rather than the string
-      // taking one example: a link drop is the case most likely to have
-      // several causes behind it, and the argument above applies to it with
-      // more force, not less.
-      _lastError = _lastFailure =
-          '${l10n.archiveSyncStoppedEarly(done, pendingIds.length)}$tail';
-      // `_lastFailure` as well as `_lastError`: that is the field with
-      // surfaces a refresh does not clear, which its own doc explains and
-      // #110 is about. On the common path - pull to refresh, a non-empty
-      // category - `_lastError` is rendered nowhere at all, so a sync that
-      // stopped on a dead link would otherwise just look finished.
-      LogService.warn('[Archive] $_lastError');
-    } else if (failed > 0) {
-      final ok = done - failed;
+    if (failed > 0) {
+      final ok = pendingIds.length - failed;
       _lastError =
           '${l10n.archiveDownloadedSummary(ok, pendingIds.length, failed)}'
-          '$tail';
-      // `warn` and not `info`, which const-folds away in release - so the one
-      // line that replaces the per-file flood was the one line that did not
-      // ship. §5's per-sync summary at `warn`, which #194 already settled for
-      // the `md5 check` loop next door, is the precedent this follows.
-      LogService.warn('[Archive] $_lastError');
+          '${_lastReadError == null ? '' : ': $_lastReadError'}';
+      LogService.info('[Archive] $_lastError');
     }
     _syncProgress = SyncProgress(
       current: done,
@@ -1520,14 +1221,7 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
     Iterable<ArchiveKey> keys, {
     bool local = true,
     bool remote = true,
-  }) => _task(() => _deleteKeys(keys, local: local, remote: remote));
-
-  Future<void> _deleteKeys(
-    Iterable<ArchiveKey> keys, {
-    bool local = true,
-    bool remote = true,
   }) async {
-    _lastFailure = null;
     for (final key in keys) {
       try {
         if (remote && _client.isConnected && !key.isDeleted) {
@@ -1546,20 +1240,17 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
           );
         }
       } catch (e) {
-        _lastError = _lastFailure = '$e';
-        LogService.warn('[Archive] delete failed: $e');
+        _lastError = '$e';
+        LogService.info('[Archive] delete failed: $e');
       }
     }
     await refresh();
   }
 
-  Future<void> restoreKey(ArchiveKey key) => _task(() => _restoreKey(key));
-
-  Future<void> _restoreKey(ArchiveKey key) async {
-    _lastFailure = null;
+  Future<void> restoreKey(ArchiveKey key) async {
     if (!key.isDeleted) return;
     if (!_client.isConnected) {
-      _lastError = _lastFailure = l10n.archiveConnectToRestore;
+      _lastError = l10n.archiveConnectToRestore;
       notifyListeners();
       return;
     }
@@ -1574,8 +1265,8 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       if (bytes == null) return;
       await _client.storageWriteChunked(key.remotePath, bytes);
     } catch (e) {
-      _lastError = _lastFailure = '$e';
-      LogService.warn('[Archive] restore failed: $e');
+      _lastError = '$e';
+      LogService.info('[Archive] restore failed: $e');
     }
     await refresh();
   }
@@ -1583,13 +1274,9 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
   /// Restores every deleted key in [keys] back to the device. Each key is marked
   /// as restored (and so drops out of the deleted list) the moment its own write
   /// succeeds, so the list empties one file at a time rather than all at once.
-  Future<void> restoreKeys(Iterable<ArchiveKey> keys) =>
-      _task(() => _restoreKeys(keys));
-
-  Future<void> _restoreKeys(Iterable<ArchiveKey> keys) async {
-    _lastFailure = null;
+  Future<void> restoreKeys(Iterable<ArchiveKey> keys) async {
     if (!_client.isConnected) {
-      _lastError = _lastFailure = l10n.archiveConnectToRestore;
+      _lastError = l10n.archiveConnectToRestore;
       notifyListeners();
       return;
     }
@@ -1616,46 +1303,24 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
           notifyListeners();
         }
       } catch (e) {
-        _lastError = _lastFailure = '$e';
-        LogService.warn('[Archive] restore ${key.fileName} failed: $e');
+        _lastError = '$e';
+        LogService.info('[Archive] restore ${key.fileName} failed: $e');
       }
     }
     await refresh();
   }
 
-  /// Reads one key and writes it locally.
-  ///
-  /// The outcome is an enum and not two bools: `ok` plus `linkDropped` had four
-  /// combinations for three reachable states, and the unreachable one -
-  /// landed, and the link died - had to be ruled out by reading the body.
-  /// [_downloadPending] branches on all three, which is why they are named.
-  Future<({_Download outcome, Object? error})> _downloadAndApply(
+  Future<bool> _downloadAndApply(
     String keyId,
     ArchiveKey key, {
     void Function(double fileProgress)? onProgress,
   }) async {
-    final read = await _readRemoteBytes(
+    final bytes = await _readRemoteBytes(
       key.remotePath,
-      // Silent per file, and §5 has to be amended for it rather than cited
-      // for it. §5 excludes the per-file `md5 check` by name on this exact
-      // argument, and rules a per-file `read` the other way - into the 12
-      // sites it moved *to* `caught`. That ruling predates the measurement:
-      // this site alone was 94% of everything the project sent in its first
-      // three days, 2267 entries from one sync, and the burst overflowed the
-      // SDK's envelope cache and evicted error events. The amendment is in
-      // §5's table; [_downloadPending]'s summary is what replaces this, and
-      // it carries a count per cause rather than one example. The default is
-      // now this, so nothing is passed here.
       expectedSize: key.remoteSize,
       onProgress: onProgress,
     );
-    final bytes = read.bytes;
-    if (bytes == null) {
-      return (
-        outcome: read.linkDropped ? _Download.linkDropped : _Download.failed,
-        error: read.error,
-      );
-    }
+    if (bytes == null) return false;
     try {
       if (key.hasLocalFile) {
         await _storage.hardDelete(
@@ -1683,44 +1348,30 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
         remoteSize: key.remoteSize > 0 ? key.remoteSize : size,
         mtime: stat.modified,
       );
-      return (outcome: _Download.saved, error: null);
+      return true;
     } catch (e) {
       _lastReadError = l10n.archiveSaveFailed(key.fileName, '$e');
-      LogService.caught('[Archive] ${_lastReadError!}');
-      // A local write failed, not the link. The next file is still worth
-      // asking for - a full disk is per-file, and so is a name the platform
-      // refuses.
-      return (outcome: _Download.failed, error: e);
+      LogService.info('[Archive] ${_lastReadError!}');
+      return false;
     }
   }
 
   /// Reads [k] from the device, publishing inline per-key transfer progress so
   /// its file element renders a fill. Returns null on failure.
   Future<List<int>?> readKeyBytes(ArchiveKey k) async {
-    _lastFailure = null;
     _busyPath = k.remotePath;
     _busyProgress = 0;
     notifyListeners();
     final throttle = ProgressThrottle();
     try {
-      final bytes = (await _readRemoteBytes(
+      return await _readRemoteBytes(
         k.remotePath,
-        // The one read a user asked for by name, so this one is worth a line
-        // of its own - which is what makes `logErrors` default to false.
-        logErrors: true,
         expectedSize: k.remoteSize,
         onProgress: (p) {
           _busyProgress = p.clamp(0.0, 1.0);
           if (throttle.shouldEmit(_busyProgress)) notifyListeners();
         },
-      )).bytes;
-      // The reason is lifted to [lastFailure] here rather than inside
-      // `_readRemoteBytes`, because this is where one thing the user asked
-      // for ends. The four internal callers of that helper read a file as
-      // part of something larger and recover from a miss, so a failure there
-      // is not the outcome of the operation and must not be reported as one.
-      if (bytes == null) _lastFailure = _lastReadError;
-      return bytes;
+      );
     } finally {
       _busyPath = null;
       _busyProgress = 0;
@@ -1729,9 +1380,8 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<bool> writeKeyBytes(ArchiveKey k, List<int> bytes) async {
-    _lastFailure = null;
     if (!_client.isConnected) {
-      _lastError = _lastFailure = l10n.archiveConnectToSave;
+      _lastError = l10n.archiveConnectToSave;
       notifyListeners();
       return false;
     }
@@ -1750,12 +1400,8 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
       );
       return true;
     } catch (e) {
-      // The editor renders the reason beside its own message, which is the
-      // surface this used to stand in for. §5: that covers the user and not
-      // the developer, and a write the device refused is the second reader's
-      // business too.
-      _lastError = _lastFailure = '$e';
-      LogService.caught('[Archive] write ${k.remotePath} failed: $e');
+      _lastError = '$e';
+      LogService.info('[Archive] write ${k.remotePath} failed: $e');
       return false;
     } finally {
       _busyPath = null;
@@ -1769,102 +1415,218 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
   Future<String?> downloadKeyToCache(ArchiveKey k) async {
     final bytes = await readKeyBytes(k);
     if (bytes == null) return null;
-    try {
-      final root = await icon_repo.shareCacheDirectory();
-      final dir = io.Directory(root.path);
-      await dir.create(recursive: true);
-      final sep = io.Platform.pathSeparator;
-      final file = io.File('${dir.path}$sep${k.fileName}');
-      await file.writeAsBytes(bytes, flush: true);
-      return file.path;
-    } catch (e) {
-      // The half after the device: a cache directory that cannot be made or
-      // a disk with no room. It threw out of here into a caller that had no
-      // catch, so sharing a key on a full phone produced an unlabelled
-      // [uncaught] and a share sheet that never opened. #110.
-      _lastError = _lastFailure = '$e';
-      LogService.warn('[Archive] cache ${k.fileName} failed: $e');
-      return null;
-    }
+    final root = await icon_repo.shareCacheDirectory();
+    final dir = io.Directory(root.path);
+    await dir.create(recursive: true);
+    final sep = io.Platform.pathSeparator;
+    final file = io.File('${dir.path}$sep${k.fileName}');
+    await file.writeAsBytes(bytes, flush: true);
+    return file.path;
   }
 
-  /// Reads [remotePath] for a receiver outside the app - a favourite app
-  /// dragged elsewhere. Null when the read failed or [onCancel] fired first.
-  Future<List<int>?> exportBytes(
-    String remotePath, {
-    Listenable? onCancel,
-    void Function(double progress)? onProgress,
-  }) async {
-    var cancelled = false;
-    void cancel() => cancelled = true;
-    onCancel?.addListener(cancel);
-    try {
-      return await _client.storageReadChunked(
-        remotePath,
-        onProgress: onProgress,
-        isCancelled: () => cancelled,
-        timeout: const Duration(minutes: 5),
-      );
-    } on FlipperCancelledException {
-      return null;
-    } catch (e) {
-      _lastError = _lastFailure = '$e';
-      LogService.warn('[Archive] read $remotePath failed: $e');
-      return null;
-    } finally {
-      onCancel?.removeListener(cancel);
-    }
-  }
-
-  /// Reads [path] off the device, with whether a dead link is why it failed.
-  ///
-  /// Both halves are returned rather than one of them parked in a field. This
-  /// has five callers and two of them run outside the `_task` queue -
-  /// [_removeDeviceFavorite] is reached through `unawaited(guarded(...))` - so
-  /// a field would belong to whoever read last, and a favourite removal
-  /// landing between a failed read here and [_downloadPending]'s own check
-  /// would swallow the answer. A record cannot be read by the wrong flow.
-  ///
-  /// [FlipperClient.isLinkDropError] is the classifier rather than a substring
-  /// match: it already owns the four `StateError` spellings a dying link
-  /// produces plus `FlipperTransportError`, and `storageWriteChunked` waits on
-  /// the same answer before restarting an upload - which is the behaviour
-  /// [_downloadPending] now mirrors, since `storageReadChunked` has no restart
-  /// of its own.
-  ///
-  /// `error` is the exception itself and not [_lastReadError]'s rendered line.
-  /// A caller that wants to group failures by cause needs something stable:
-  /// the field holds a localized string, it is shared with `archiveSaveFailed`,
-  /// and recovering a key by splitting it on `': '` lands on the last fragment
-  /// of the message rather than on the fault. Same argument as the record
-  /// itself - an answer belongs with the call that produced it.
-  ///
-  /// `logErrors` defaults to **false**, which is the §5 amendment written into
-  /// the signature: a per-file read inside a sync is the common case and must
-  /// not log, and the one read a user asked for by name opts in. Four of the
-  /// five callers wanted the quiet behaviour, so the default was the minority.
-  Future<({List<int>? bytes, bool linkDropped, Object? error})>
-  _readRemoteBytes(
+  Future<List<int>?> _readRemoteBytes(
     String path, {
-    bool logErrors = false,
+    bool logErrors = true,
     int expectedSize = 0,
     void Function(double progress)? onProgress,
   }) async {
     try {
-      final bytes = await _client.storageReadChunked(
+      return await _client.storageReadChunked(
         path,
         expectedSize: expectedSize,
         onProgress: onProgress,
         timeout: const Duration(minutes: 5),
       );
-      return (bytes: bytes, linkDropped: false, error: null);
     } catch (e) {
       _lastReadError = l10n.archiveReadFailed(path, '$e');
       if (logErrors) {
-        LogService.caught('[Archive] ${_lastReadError!}');
+        LogService.info('[Archive] ${_lastReadError!}');
       }
-      return (bytes: null, linkDropped: _client.isLinkDropError(e), error: e);
+      return null;
     }
+  }
+
+  SubghzSyncView get subghzSync {
+    final local = <SubghzArchiveFile>[];
+    final gaps = <SubghzArchiveGap>[];
+    for (final entry in _keys.entries) {
+      final key = entry.value;
+      if (key.category != ArchiveCategory.subghz || key.isDeleted) continue;
+      if (key.inLocal) {
+        local.add(
+          SubghzArchiveFile(
+            keyId: entry.key,
+            remotePath: key.remotePath,
+            name: key.fileName,
+            size: key.localSize,
+            localPath: key.localPath!,
+          ),
+        );
+      }
+      if (!_subghzVerified) continue;
+      final missing = !key.hasLocalFile && key.remoteSize > 0;
+      final changed =
+          key.hasLocalFile &&
+          key.remoteSize > 0 &&
+          key.remoteSize != key.localSize;
+      if (!missing && !changed) continue;
+      gaps.add(
+        SubghzArchiveGap(
+          keyId: entry.key,
+          remotePath: key.remotePath,
+          name: key.fileName,
+          remoteSize: key.remoteSize,
+          localPath: key.localPath,
+        ),
+      );
+    }
+    local.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final freshness = !_subghzVerified
+        ? SubghzSyncFreshness.unknown
+        : (gaps.isEmpty
+              ? SubghzSyncFreshness.current
+              : SubghzSyncFreshness.pending);
+    return SubghzSyncView(freshness: freshness, local: local, gaps: gaps);
+  }
+
+  Future<void> warmSubghzLocals() async {
+    if (_deviceName.isEmpty) {
+      final live = _client.getName();
+      if (live != null && live.isNotEmpty) {
+        _setDeviceName(live);
+      } else {
+        await _adoptLastDeviceName();
+      }
+    }
+    if (_deviceName.isEmpty || _localsForDevice == _deviceName) return;
+    await _reloadSubghzLocals();
+  }
+
+  Future<void> ensureSubghzVerified({bool force = false}) async {
+    if (!force && _subghzVerified) return;
+    await warmSubghzLocals();
+    if (!_client.isConnected) return;
+    if (_deviceName.isEmpty && !await _awaitRealDeviceName()) return;
+    await _verifySubghzShared(force: force);
+    if (!_subghzVerified && _client.isConnected) {
+      await _verifySubghzShared(force: false);
+    }
+  }
+
+  Future<void> _verifySubghzShared({required bool force}) {
+    if (!force && _subghzVerified) return Future<void>.value();
+    final running = _subghzVerifyLock;
+    if (running != null && !force) return running;
+    final previous = _subghzVerifyLock ?? Future<void>.value();
+    late final Future<void> run;
+    run = previous.catchError((Object _) {}).then((_) async {
+      if (!force && _subghzVerified) return;
+      if (!_client.isConnected || _deviceName.isEmpty) return;
+      final epoch = _keysEpoch;
+      await _verifyCategory(ArchiveCategory.subghz);
+      if (epoch != _keysEpoch) _subghzVerified = false;
+    });
+    _subghzVerifyLock = run;
+    return run.whenComplete(() {
+      if (identical(_subghzVerifyLock, run)) _subghzVerifyLock = null;
+    });
+  }
+
+  Future<void> pullSubghzGaps({int? maxBytes}) async {
+    while (_syncing) {
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+    if (!_client.isConnected) return;
+    if (!_subghzVerified) await ensureSubghzVerified();
+    if (!_subghzVerified || !_client.isConnected) return;
+    final gaps = [
+      for (final gap in subghzSync.gaps)
+        if (maxBytes == null || gap.remoteSize <= maxBytes) gap,
+    ];
+    for (final gap in gaps) {
+      if (!_pullingGaps.add(gap.keyId)) continue;
+      try {
+        final key = _keys[gap.keyId];
+        if (key == null) continue;
+        if (key.hasLocalFile && key.remoteSize == key.localSize) continue;
+        await _downloadAndApply(gap.keyId, key);
+        notifyListeners();
+      } finally {
+        _pullingGaps.remove(gap.keyId);
+      }
+    }
+  }
+
+  Future<void> mirrorSubghzFile(String remotePath, List<int> bytes) async {
+    final parsed = SubghzRemotePath.tryParse(remotePath);
+    if (parsed == null) return;
+    try {
+      if (_deviceName.isEmpty) {
+        final live = _client.getName();
+        if (live != null && live.isNotEmpty) {
+          _setDeviceName(live);
+        } else {
+          await _adoptLastDeviceName();
+        }
+      }
+      if (_deviceName.isEmpty) return;
+      final file = await _storage.saveBytes(
+        _deviceName,
+        parsed.category,
+        parsed.fileName,
+        bytes,
+        flipperDir: parsed.flipperDir,
+        subFolder: parsed.subFolder,
+      );
+      final stat = await file.stat();
+      final keyId = _localKey(
+        parsed.flipperDir,
+        parsed.name,
+        'sub',
+        parsed.subFolder,
+      );
+      final prev = _keys[keyId];
+      _keys[keyId] = ArchiveKey(
+        name: parsed.name,
+        category: parsed.category,
+        extension: 'sub',
+        flipperDir: parsed.flipperDir,
+        subFolder: parsed.subFolder,
+        state: ArchiveKeyState.synced,
+        remoteSize: bytes.length,
+        localSize: stat.size,
+        localPath: file.path,
+        favorite: prev?.favorite ?? _favorites.contains(keyId),
+        protocol: prev?.protocol,
+        extra: prev?.extra,
+        mtime: stat.modified,
+        meta: prev?.meta,
+      );
+      notifyListeners();
+    } catch (e) {
+      LogService.warn('[Archive] mirror $remotePath failed: $e');
+    }
+  }
+
+  Future<void> _reloadSubghzLocals() async {
+    if (_deviceName.isEmpty) return;
+    _keysEpoch++;
+    _subghzVerified = false;
+    await _storage.ensureLayout(_deviceName);
+    await _loadFavorites();
+    final localEntries = await _storage.listOneCategory(
+      _deviceName,
+      ArchiveCategory.subghz,
+    );
+    final seen = <String>{};
+    for (final entry in localEntries) {
+      seen.add(_ingestLocal(entry));
+    }
+    _keys.removeWhere(
+      (id, v) => v.category == ArchiveCategory.subghz && !seen.contains(id),
+    );
+    _localsForDevice = _deviceName;
+    notifyListeners();
   }
 
   /// Inserts or replaces a key from a locally-stored file entry.
@@ -1903,26 +1665,4 @@ class ArchiveController extends ChangeNotifier with WidgetsBindingObserver {
 
   String _keyIdOf(ArchiveKey key) =>
       _localKey(key.flipperDir, key.name, key.extension, key.subFolder);
-}
-
-/// What one file's download did, for [ArchiveController] alone.
-///
-/// Three named states rather than `ok` plus `linkDropped`, which had a fourth
-/// combination that cannot happen - landed, and the link died - and so had to
-/// be ruled out by reading the body rather than by the type.
-///
-/// The distinction [_Download.linkDropped] carries is not severity, it is
-/// whose problem it is: a per-file fault means ask for the next file, a dead
-/// link means stop asking. `storageReadChunked` has no restart of its own, so
-/// the sync loop is where that is decided.
-enum _Download {
-  /// Read, written locally, and the key is `synced`.
-  saved,
-
-  /// This file did not land, and the next one is still worth asking for - a
-  /// refused name, a full disk, a firmware status about this path.
-  failed,
-
-  /// The link died. Nothing else in the queue can be read until it is back.
-  linkDropped,
 }

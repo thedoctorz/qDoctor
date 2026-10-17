@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:flutter/material.dart';
-import 'package:qunleashed/components/appbar.dart';
+import 'package:doctormobile/components/appbar.dart';
 import 'package:re_editor/re_editor.dart';
 
 import '../../../components/dialogs/confirm.dart';
@@ -22,7 +22,6 @@ import 'line_numbers.dart';
 import 'style.dart';
 import 'syntax.dart';
 import 'toolbar.dart';
-import '../../devices/device_scope.dart';
 
 enum EditorMode { text, hex }
 
@@ -32,21 +31,12 @@ class TextEditorPage extends StatefulWidget {
     required this.localPath,
     this.title,
     this.onSave,
-    this.onSaveFailureReason,
     this.onRun,
   });
 
   final String localPath;
   final String? title;
   final Future<bool> Function(List<int> bytes)? onSave;
-
-  /// Why the last [onSave] returned false, read straight after it did.
-  ///
-  /// A callback rather than a return value because the writer that knows the
-  /// reason is a controller the editor does not have, and `onSave`'s bool is
-  /// the shape every caller already passes. The same arrangement as
-  /// `sendFailureReason` in the infrared file page. #110.
-  final String? Function()? onSaveFailureReason;
   final VoidCallback? onRun;
 
   @override
@@ -109,27 +99,17 @@ class _TextEditorPageState extends State<TextEditorPage> {
       _error = null;
     });
     List<int>? bytes;
-    String? reason;
     try {
       bytes = await Future(() => io.File(widget.localPath).readAsBytesSync());
     } catch (e) {
-      // The panel below renders the reason. A file that is gone and one the
-      // platform will not hand over used to read the same on screen, and the
-      // difference lived only in a release build's silence - which §5 is the
-      // answer to: `caught` survives a release build and reaches the second
-      // reader.
-      reason = '$e';
-      LogService.caught('[TextEditor] read ${widget.localPath} failed: $e');
+      LogService.info('[TextEditor] read ${widget.localPath} failed: $e');
     }
     if (!mounted) return;
     final binary = bytes != null && looksBinary(bytes);
     setState(() {
       _loading = false;
       if (bytes == null) {
-        final message = context.l10n.editorReadFailed;
-        _error = reason == null
-            ? message
-            : context.l10n.fmFailedBecause(message, reason);
+        _error = context.l10n.editorReadFailed;
       } else if (binary) {
         _openHex(bytes);
       } else {
@@ -238,13 +218,8 @@ class _TextEditorPageState extends State<TextEditorPage> {
         doc!.markSaved(_controller.codeLines);
       }
     });
-    final reason = ok ? null : widget.onSaveFailureReason?.call();
     context.showNotification(
-      ok
-          ? context.l10n.editorSaved
-          : reason == null || reason.isEmpty
-          ? context.l10n.editorSaveFailed
-          : context.l10n.fmFailedBecause(context.l10n.editorSaveFailed, reason),
+      ok ? context.l10n.editorSaved : context.l10n.editorSaveFailed,
       type: ok ? QNotificationType.good : QNotificationType.error,
     );
     if (ok) Navigator.of(context).pop(true);
@@ -256,7 +231,6 @@ class _TextEditorPageState extends State<TextEditorPage> {
     return Scaffold(
       backgroundColor: colors.background,
       appBar: QPageAppBar(
-        client: DeviceScope.of(context).client,
         title: _name,
         backgroundColor: colors.accent,
         foregroundColor: colors.onAccent,
@@ -321,40 +295,38 @@ class _TextEditorPageState extends State<TextEditorPage> {
     }
     final doc = _doc!;
     final root = _highlightTheme.theme['root'];
-    return EditorSelectionMenuScope(
-      builder: (toolbar) => CodeEditor(
-        controller: _controller,
-        findController: _find,
-        autofocus: false,
-        chunkAnalyzer: const NonCodeChunkAnalyzer(),
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        style: CodeEditorStyle(
-          fontSize: kEditorFontSize,
-          fontHeight: kEditorLineHeight,
-          fontFamily: kEditorFontFamily,
-          textColor: root?.color,
-          backgroundColor: root?.backgroundColor ?? colors.terminalBackground,
-          cursorColor: colors.accent,
-          selectionColor: colors.accent.withValues(alpha: 0.35),
-          highlightColor: colors.accent.withValues(alpha: 0.55),
-          codeTheme: _highlightTheme,
-        ),
-        indicatorBuilder:
-            (context, editingController, chunkController, notifier) {
-              return EditorLineNumbers(
-                controller: editingController,
-                notifier: notifier,
-                document: doc,
-              );
-            },
-        findBuilder: (context, controller, readOnly) => EditorFindPanel(
-          controller: controller,
-          readOnly: readOnly,
-          background: colors.accent,
-          foreground: colors.onAccent,
-        ),
-        toolbarController: toolbar,
+    return CodeEditor(
+      controller: _controller,
+      findController: _find,
+      autofocus: false,
+      chunkAnalyzer: const NonCodeChunkAnalyzer(),
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      style: CodeEditorStyle(
+        fontSize: kEditorFontSize,
+        fontHeight: kEditorLineHeight,
+        fontFamily: kEditorFontFamily,
+        textColor: root?.color,
+        backgroundColor: root?.backgroundColor ?? colors.terminalBackground,
+        cursorColor: colors.accent,
+        selectionColor: colors.accent.withValues(alpha: 0.35),
+        highlightColor: colors.accent.withValues(alpha: 0.55),
+        codeTheme: _highlightTheme,
       ),
+      indicatorBuilder:
+          (context, editingController, chunkController, notifier) {
+            return EditorLineNumbers(
+              controller: editingController,
+              notifier: notifier,
+              document: doc,
+            );
+          },
+      findBuilder: (context, controller, readOnly) => EditorFindPanel(
+        controller: controller,
+        readOnly: readOnly,
+        background: colors.accent,
+        foreground: colors.onAccent,
+      ),
+      toolbarController: editorSelectionToolbar,
     );
   }
 }

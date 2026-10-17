@@ -3,9 +3,6 @@
 # `flutter test` can run on a checkout that has no Firebase secrets — a pull
 # request from a fork, or a clone by a contributor.
 #
-# This is deliberately NOT part of restore_firebase_config.sh: a release must
-# keep failing loudly when the real configuration is missing, and must never
-# fall back to a stub that ships an app whose push notifications throw.
 set -Eeuo pipefail
 
 TARGET="lib/services/notifications/firebase_options.dart"

@@ -54,12 +54,7 @@ class KnownDevicesStore extends ChangeNotifier {
   static const String _prefsKey = 'known_devices_v1';
   static const int _maxEntries = 8;
 
-  /// A plain field again. It was a getter over `_devicesValue` with a setter
-  /// that fed every name to `Scrub.rememberDeviceName`, because this is the
-  /// only place that knows a Flipper's name *before* a session exists. ADR
-  /// 0013 §6.2 no longer redacts device names, so there is nothing to feed.
   List<KnownDevice> _devices = const [];
-
   Future<void>? _loading;
 
   List<KnownDevice> get devices => _devices;
@@ -136,38 +131,20 @@ class KnownDevicesStore extends ChangeNotifier {
     await _persist();
   }
 
-  /// Not `persistSetting`, which logs at warn: the ruling below is error,
-  /// and this is a device list rather than a setting. What it shares is the
-  /// half #313 was about - `setString` answering `false` without throwing.
-  ///
-  /// The two bodies say the same thing as that function's, deliberately: a
-  /// reader grepping for one failure should not have to know there are two
-  /// spellings of it.
   Future<void> _persist() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final accepted = await prefs.setString(
+      await prefs.setString(
         _prefsKey,
         jsonEncode([for (final device in _devices) device.toJson()]),
       );
-      if (!accepted) {
-        LogService.error(
-          '[KnownDevices] save failed: the store refused the write',
-        );
-      }
-    } catch (e, st) {
+    } catch (e) {
       // error, not warn, alone in this sweep: it is the only failure here
       // that loses something durable. notifyListeners has already run, so the
       // picker shows the device as remembered and the user finds out at the
       // next launch, when it is gone. Worth having in a log kept at
       // QLOG_LEVEL=error, and it cannot repeat - one write per mutation.
-      //
-      // With the stack, which is the only thing naming which mutation was
-      // saving - remember, updateName or forget. A PlatformException arrives
-      // with none of that in its message.
-      LogService.error(
-        '[KnownDevices] save failed: ${LogService.describe(e, st)}',
-      );
+      LogService.error('[KnownDevices] save failed: $e');
     }
   }
 }

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:dartufbt/dartufbt.dart';
 import 'package:flutter/material.dart';
 
-import '../../../services/guarded.dart';
 import '../../../components/cardlist.dart';
 import '../../../components/navigation.dart';
 import '../../../services/localization/l10n.dart';
@@ -78,7 +77,7 @@ class _AssemblerSettingsPageState extends State<AssemblerSettingsPage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ctrl.refreshStatus();
-      unawaited(guarded('[Settings/Flibler] server status', _loadServerStatus));
+      unawaited(_loadServerStatus());
     });
   }
 
@@ -106,7 +105,7 @@ class _AssemblerSettingsPageState extends State<AssemblerSettingsPage> {
   Future<void> _selectBackend(AssemblerBackendPreference preference) async {
     await _ctrl.setPreference(preference);
     if (_ctrl.usesServerBuild && _serverStatus == null) {
-      unawaited(guarded('[Settings/Flibler] server status', _loadServerStatus));
+      unawaited(_loadServerStatus());
     }
   }
 

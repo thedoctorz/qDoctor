@@ -1,22 +1,12 @@
 import 'dart:io';
 
-import 'package:flipperlib/flipperlib.dart' hide File;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/infrared/controller.dart';
-import 'package:qunleashed/pages/tools/infrared/local_repo.dart';
-import 'package:qunleashed/pages/tools/infrared/settings_dialog.dart';
-import 'package:qunleashed/services/localization/l10n.dart';
-import 'package:qunleashed/theme/theme.dart';
-
-/// Nothing here reaches the device; the controller needs one to exist.
-class _NoFlipper implements FlipperClient {
-  @override
-  bool get isConnected => false;
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
+import 'package:doctormobile/pages/tools/infrared/controller.dart';
+import 'package:doctormobile/pages/tools/infrared/local_repo.dart';
+import 'package:doctormobile/pages/tools/infrared/settings_dialog.dart';
+import 'package:doctormobile/services/localization/l10n.dart';
+import 'package:doctormobile/theme/theme.dart';
 
 final String sep = Platform.pathSeparator;
 
@@ -77,9 +67,7 @@ void main() {
     await tester.runAsync(IrLibLocalRepo.recoverStranded);
 
     await tester.pumpWidget(
-      wrap(
-        IrLibSettingsDialog(controller: IrLibController(client: _NoFlipper())),
-      ),
+      wrap(IrLibSettingsDialog(controller: IrLibController())),
     );
     await tester.pump();
 
@@ -97,9 +85,7 @@ void main() {
     await tester.runAsync(IrLibLocalRepo.recoverStranded);
 
     await tester.pumpWidget(
-      wrap(
-        IrLibSettingsDialog(controller: IrLibController(client: _NoFlipper())),
-      ),
+      wrap(IrLibSettingsDialog(controller: IrLibController())),
     );
     await tester.pump();
 
@@ -116,9 +102,7 @@ void main() {
     final aside = strandTheLibrary();
 
     await tester.pumpWidget(
-      wrap(
-        IrLibSettingsDialog(controller: IrLibController(client: _NoFlipper())),
-      ),
+      wrap(IrLibSettingsDialog(controller: IrLibController())),
     );
     await tester.pump();
     expect(noticeFinder(), findsNothing);

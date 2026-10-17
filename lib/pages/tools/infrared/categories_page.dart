@@ -8,15 +8,13 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../../theme/theme.dart';
 
-import 'package:qunleashed/components/appbar.dart';
-import 'package:qunleashed/components/icon.dart';
-import 'package:qunleashed/components/navigation.dart';
+import 'package:doctormobile/components/appbar.dart';
+import 'package:doctormobile/components/icon.dart';
 
 import 'backend/infrared_backend_api.dart';
 import 'backend/infrared_backend_models.dart';
 import 'brands_page.dart';
 import 'page.dart';
-import '../../devices/device_scope.dart';
 
 class IrCategoriesPage extends StatefulWidget {
   const IrCategoriesPage({super.key});
@@ -64,16 +62,14 @@ class _IrCategoriesPageState extends State<IrCategoriesPage> {
     }
   }
 
-  // Both pushed pages load in initState - the brand list from the backend, the
-  // IRDB browser from the device - so a second tap costs a request as well as a
-  // stacked page. #244.
   void _openCategory(DeviceCategory c) {
-    pushPage(context, (_) => IrBrandsPage(category: c));
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => IrBrandsPage(category: c)));
   }
 
   void _openIrdb() {
-    final client = DeviceScope.of(context).client;
-    pushPage(context, (_) => IrLibPage(client: client));
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const IrLibPage()));
   }
 
   @override
@@ -82,7 +78,6 @@ class _IrCategoriesPageState extends State<IrCategoriesPage> {
     return Scaffold(
       backgroundColor: colors.background,
       appBar: QPageAppBar(
-        client: DeviceScope.of(context).client,
         title: context.l10n.irLibraryTitle,
         backgroundColor: colors.accent,
         foregroundColor: colors.onAccent,

@@ -1,6 +1,7 @@
 import '../../../../services/localization/l10n.dart';
 
 const String kCartoProviderId = 'carto';
+const String kOsmProviderId = 'osm';
 
 class MapTileDesign {
   const MapTileDesign({
@@ -136,7 +137,7 @@ MapTileProvider cartoProvider(L10n s) => MapTileProvider(
 );
 
 MapTileProvider osmProvider(L10n s) => MapTileProvider(
-  id: 'osm',
+  id: kOsmProviderId,
   label: 'OpenStreetMap',
   description: s.mapProviderOsmDesc,
   attribution: '© OpenStreetMap contributors',
@@ -571,5 +572,5 @@ MapTileProvider mapProviderById(String? id) {
   for (final provider in mapTileProviders(s)) {
     if (provider.id == id) return provider;
   }
-  return cartoProvider(s);
+  return osmProvider(s);
 }

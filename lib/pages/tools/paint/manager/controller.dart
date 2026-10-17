@@ -28,37 +28,17 @@ class PaintItem {
   String get id => project.id;
 }
 
-/// What applying hand-edited manifest text did.
-class ManifestApplied {
-  const ManifestApplied({required this.applied, required this.nameless});
-
-  /// Animations named in the text that exist locally and were selected.
-  final int applied;
-
-  /// Paragraphs that held settings but named no animation. Dropped.
-  final int nameless;
-}
-
 /// Backs the whole Pixel Draw library screen: lists local projects (drawings,
 /// GIFs, dolphin animations and drafts) with their manifest settings, imports
 /// the device's animations, and sends the selected pack back to it.
 class ProjectManagerController extends ChangeNotifier {
-  /// [display] is the virtual-display session the previews go to.
-  ///
-  /// Defaulted to the shared one, which is what the screen wants: the editor
-  /// holds the same session, and a preview here has to give way to a canvas
-  /// there. A test passes its own, because the shared one reaches for the
-  /// app's client and would put a real display in play. ADR 0002.
-  ProjectManagerController({
-    required this._client,
-    VirtualDisplaySession? display,
-  }) : _display = display ?? VirtualDisplaySession.instance {
+  ProjectManagerController({FlipperClient? client})
+    : _client = client ?? FlipperOneClient().get() {
     _connSub = _client.connectionStream.listen((_) => _notify());
-    _display.enter();
+    VirtualDisplaySession.instance.enter();
   }
 
   final FlipperClient _client;
-  final VirtualDisplaySession _display;
   StreamSubscription<FlipperConnectionState>? _connSub;
   bool _disposed = false;
 
@@ -72,40 +52,13 @@ class ProjectManagerController extends ChangeNotifier {
   String? _error;
 
   List<PaintItem> get items => _items;
-
-  /// Installs a library without reading one off disk.
-  ///
-  /// For tests. Everything the manifest screen does - selecting, editing
-  /// settings, applying pasted text - works over this list, and the real one
-  /// comes from a directory walk that a test has no business staging.
-  @visibleForTesting
-  void seedItems(List<PaintItem> items) {
-    _items = items;
-    _notify();
-  }
-
   bool get loading => _loading;
   bool get importing => _importing;
   bool get sending => _sending;
   bool get busy => _importing || _sending;
   ImportProgress? get importProgress => _importProgress;
   SendProgress? get sendProgress => _sendProgress;
-
-  /// The last failure nobody has been told about yet, taken once.
-  ///
-  /// Read-and-clear rather than a field the page polls, because the page
-  /// showed [_error] on every notification: a stale one re-appeared on every
-  /// tick of the weight slider after a failed scan. Taken once, it cannot.
-  ///
-  /// It also has to outlive the reload each operation ends with - delete set
-  /// it and never notified, and the reload that followed cleared it before
-  /// any listener ran, so the string was built and thrown away unread. #114.
-  String? takeFailure() {
-    final failure = _error;
-    _error = null;
-    return failure;
-  }
-
+  String? get error => _error;
   bool get isConnected => _client.isConnected;
   String? get selectedId => _selectedId;
   int get packCount => _items.where((i) => i.entry.selected).length;
@@ -131,23 +84,17 @@ class ProjectManagerController extends ChangeNotifier {
     final token = ++_previewToken;
     final project = selected?.project;
     if (project == null) {
-      _display.clearPreview();
+      VirtualDisplaySession.instance.clearPreview();
       return;
     }
     try {
       final preview = await project.loadDevicePreview();
       if (token != _previewToken || _disposed) return;
-      _display.setPreview(preview.frames, preview.delayMs);
-    } catch (e) {
-      // The user picked an animation and the Flipper shows nothing. There is
-      // no failed state on this screen to put it in - the row is selected and
-      // the device is blank - so the log is the only place it can go.
-      if (token != _previewToken || _disposed) return;
-      _display.clearPreview();
-      LogService.warn(
-        '[Paint] could not preview "${project.id}" on the device: $e',
+      VirtualDisplaySession.instance.setPreview(
+        preview.frames,
+        preview.delayMs,
       );
-    }
+    } catch (_) {}
   }
 
   /// Scans the local library, seeding each animation's manifest entry from the
@@ -155,13 +102,8 @@ class ProjectManagerController extends ChangeNotifier {
   /// never discards edits that have not been sent yet. When [silent] is true
   /// the loading spinner is suppressed.
   Future<void> loadAll({bool silent = false}) async {
-    if (!silent) {
-      _loading = true;
-      // Only a load the user asked for starts clean. A silent one is the
-      // reload another operation ends with, and clearing here is what used to
-      // swallow that operation's own failure. #114.
-      _error = null;
-    }
+    if (!silent) _loading = true;
+    _error = null;
     _notify();
     try {
       final projects = await PaintProject.scanAll();
@@ -171,11 +113,8 @@ class ProjectManagerController extends ChangeNotifier {
         for (final p in projects) PaintItem(p, _entryFor(p, current, stored)),
       ];
     } catch (e) {
-      // The contract for this controller: every catch sets the failure, and
-      // the page takes it on the next notification. Nothing clears it in
-      // between, which is what #114 was about.
       _error = '$e';
-      LogService.caught('[PixelDraw] loadAll failed: $e');
+      LogService.info('[PixelDraw] loadAll failed: $e');
     } finally {
       _loading = false;
       _notify();
@@ -205,19 +144,11 @@ class ProjectManagerController extends ChangeNotifier {
       }
       if (_selectedId == project.id) {
         _selectedId = null;
-        _display.clearPreview();
+        VirtualDisplaySession.instance.clearPreview();
       }
     } catch (e) {
-      // This one still does not notify. It does not need to: the silent
-      // reload below notifies, and no longer clears the failure on its way
-      // past - so the page takes it there, and the project reappearing in
-      // the list comes with the reason it did.
       _error = l10n.paintDeleteFailed('$e');
-      // Stays at warn even though the toast works now: the toast fades and a
-      // bug report about a project that would not delete has nothing in it.
-      // A surface names the outcome, the log keeps the cause, and both are
-      // wanted - the same call #112 made.
-      LogService.warn('[PixelDraw] delete failed: $e');
+      LogService.info('[PixelDraw] delete failed: $e');
     }
     await loadAll(silent: true);
   }
@@ -269,17 +200,11 @@ class ProjectManagerController extends ChangeNotifier {
   );
 
   /// Applies hand-edited manifest text: every animation listed there joins the
-  /// pack with the settings from the text, everything else leaves it.
-  ///
-  /// Reports how many of the listed animations exist locally, and how many
-  /// paragraphs of the text belonged to no animation at all - those are
-  /// dropped, and a user who typed one wants telling.
-  ManifestApplied applyManifest(String text) {
-    final read = DolphinManifest.parse(text);
-    final parsed = read.entries;
-    if (parsed.isEmpty) {
-      return ManifestApplied(applied: 0, nameless: read.nameless);
-    }
+  /// pack with the settings from the text, everything else leaves it. Returns
+  /// how many of the listed animations exist locally.
+  int applyManifest(String text) {
+    final parsed = DolphinManifest.parse(text);
+    if (parsed.isEmpty) return 0;
     var applied = 0;
     for (final item in _items) {
       final edited = parsed[item.entry.name];
@@ -297,7 +222,7 @@ class ProjectManagerController extends ChangeNotifier {
       applied++;
     }
     _notify();
-    return ManifestApplied(applied: applied, nameless: read.nameless);
+    return applied;
   }
 
   // ------------------------------------------------------------------ upload
@@ -327,7 +252,7 @@ class ProjectManagerController extends ChangeNotifier {
     _selectedId = null;
     _notify();
 
-    await _display.suspend();
+    await VirtualDisplaySession.instance.suspend();
 
     try {
       await DolphinSender.send(
@@ -340,11 +265,11 @@ class ProjectManagerController extends ChangeNotifier {
       );
     } catch (e) {
       _error = l10n.paintSendFailed('$e');
-      LogService.caught('[PixelDraw] send failed: $e');
+      LogService.info('[PixelDraw] send failed: $e');
     } finally {
       _sending = false;
       _sendProgress = null;
-      _display.resume();
+      VirtualDisplaySession.instance.resume();
       _notify();
     }
   }
@@ -355,18 +280,12 @@ class ProjectManagerController extends ChangeNotifier {
   /// many files were actually transferred — zero when everything already
   /// matched by md5. The work itself lives in [DolphinImporter]; the controller
   /// only owns the state it publishes.
-  /// Returns how many files were transferred, or null when the import did
-  /// not finish.
-  ///
-  /// Null rather than zero, because zero is the answer that makes the page
-  /// say "already up to date" - and it said it over the failure's own toast,
-  /// which [QNotification.show] removes outright rather than fading. #114.
-  Future<int?> importFromDevice() async {
-    if (_importing) return null;
+  Future<int> importFromDevice() async {
+    if (_importing) return 0;
     if (!_client.isConnected) {
       _error = l10n.paintNoDevice;
       _notify();
-      return null;
+      return 0;
     }
     _importing = true;
     _importProgress = null;
@@ -374,7 +293,6 @@ class ProjectManagerController extends ChangeNotifier {
     _notify();
 
     var written = 0;
-    var failed = false;
     try {
       final localRoot = await appDolphinAnimationsDirectory();
       written = await DolphinImporter.run(
@@ -387,10 +305,8 @@ class ProjectManagerController extends ChangeNotifier {
         onFolder: () => loadAll(silent: true),
       );
     } catch (e) {
-      failed = true;
       _error = l10n.paintImportFailed('$e');
-      // Stays at warn, as delete above.
-      LogService.warn('[PixelDraw] import failed: $e');
+      LogService.info('[PixelDraw] import failed: $e');
     } finally {
       _importing = false;
       _importProgress = null;
@@ -398,7 +314,7 @@ class ProjectManagerController extends ChangeNotifier {
     }
 
     await loadAll(silent: true);
-    return failed ? null : written;
+    return written;
   }
 
   void _notify() {
@@ -409,8 +325,8 @@ class ProjectManagerController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _connSub?.cancel();
-    _display.clearPreview();
-    _display.leave();
+    VirtualDisplaySession.instance.clearPreview();
+    VirtualDisplaySession.instance.leave();
     super.dispose();
   }
 }

@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../emulate/service.dart';
-import '../guarded.dart';
 import '../logging.dart';
 import 'cold_link.dart';
 import 'widget_key.dart';
@@ -51,7 +50,9 @@ class HomeWidgetService {
 
   static final HomeWidgetService instance = HomeWidgetService._();
 
-  static const MethodChannel _channel = MethodChannel('qunleashed/home_widget');
+  static const MethodChannel _channel = MethodChannel(
+    'doctormobile/home_widget',
+  );
   static const Duration _flashDuration = Duration(seconds: 3);
   static const Duration _sendHold = Duration(milliseconds: 500);
 
@@ -72,20 +73,9 @@ class HomeWidgetService {
 
   bool get supported => Platform.isAndroid;
 
-  FlipperClient? _client;
-
   /// [promote] brings a cold isolate up to the full app; it runs once, when
   /// the activity attaches to an engine a widget started.
-  ///
-  /// [client] comes from `_initCore`, which is the one place that runs on
-  /// both entry points - this serves widget taps in the headless isolate as
-  /// well as in the full app, so a client taken from anything the UI builds
-  /// would not exist on half the paths that reach here. ADR 0002.
-  void install({
-    required FlipperClient client,
-    required Future<void> Function() promote,
-  }) {
-    _client = client;
+  void install({required Future<void> Function() promote}) {
     _promote = promote;
     if (_installed || !supported) return;
     _installed = true;
@@ -97,11 +87,7 @@ class HomeWidgetService {
     try {
       return await _channel.invokeMethod<bool>('pin', key.toMap()) ?? false;
     } on PlatformException catch (e) {
-      // The caller renders "pinning is not supported here" on the false
-      // below, so the user is told. §5 is about the other reader: a launcher
-      // refusing a pin is an operation that did not do what was asked, and it
-      // is bounded by a tap rather than a poll.
-      LogService.caught('[HomeWidget] pin failed: ${e.message}');
+      LogService.info('[HomeWidget] pin failed: ${e.message}');
       return false;
     }
   }
@@ -176,13 +162,11 @@ class HomeWidgetService {
           await _setState(id, WidgetState.errorFile);
           return null;
         }
-        unawaited(guarded('[Widget] tap', () => _onTap(id, key)));
+        unawaited(_onTap(id, key));
         return null;
       case 'cancel':
         final args = call.arguments as Map<Object?, Object?>;
-        unawaited(
-          guarded('[Widget] cancel', () => _onCancel(args['widgetId'] as int)),
-        );
+        unawaited(_onCancel(args['widgetId'] as int));
         return null;
       case 'pick':
         final args = call.arguments as Map<Object?, Object?>;
@@ -237,15 +221,7 @@ class HomeWidgetService {
   }
 
   Future<void> _serve(int id, WidgetKey key) async {
-    final client = _client;
-    if (client == null) {
-      // install() runs in `_initCore`, which both entry points await before
-      // anything can tap a widget. Reaching here means the channel handler
-      // was wired without it, which is a wiring bug rather than a state.
-      LogService.warn('[HomeWidget] tap before install; no client');
-      await _flash(id, WidgetState.errorFailed);
-      return;
-    }
+    final client = FlipperOneClient().get();
     await _setState(id, WidgetState.connecting);
     if (!await ColdLink.instance.ensureConnected(client)) {
       await _flash(id, WidgetState.errorNoDevice);
@@ -271,24 +247,11 @@ class HomeWidgetService {
 
     if (key.holdToSend) {
       await _setState(id, WidgetState.sending);
-      // The widget has one frame to tell the user what happened, and it used
-      // to say "sent" whether or not anything reached the Flipper. A press
-      // that timed out on a link that had gone looked exactly like one that
-      // worked. #104.
-      final pressed = await service.sendPress();
+      await service.sendPress();
       await Future<void>.delayed(_sendHold);
-      final released = await service.sendRelease();
+      await service.sendRelease();
       await service.stop();
-      if (!pressed || !released) {
-        LogService.warn(
-          '[HomeWidget] send did not complete: press=$pressed '
-          'release=$released',
-        );
-      }
-      await _flash(
-        id,
-        pressed && released ? WidgetState.sent : WidgetState.errorFailed,
-      );
+      await _flash(id, WidgetState.sent);
       return;
     }
 
@@ -298,14 +261,7 @@ class HomeWidgetService {
     _closedSub = client
         .appStateStream()
         .where((s) => s.state == AppState.APP_CLOSED)
-        .listen(
-          (_) => unawaited(
-            guarded(
-              '[Widget] closed on device',
-              () => _onClosedOnDevice(service),
-            ),
-          ),
-        );
+        .listen((_) => unawaited(_onClosedOnDevice(service)));
   }
 
   Future<void> _onClosedOnDevice(EmulateService service) async {
@@ -344,14 +300,7 @@ class HomeWidgetService {
     await _setState(id, state);
     _flashTimer?.cancel();
     _flashTimer = Timer(_flashDuration, () {
-      if (_activeId != id) {
-        unawaited(
-          guarded(
-            '[Widget] back to idle',
-            () => _setState(id, WidgetState.idle),
-          ),
-        );
-      }
+      if (_activeId != id) unawaited(_setState(id, WidgetState.idle));
     });
   }
 

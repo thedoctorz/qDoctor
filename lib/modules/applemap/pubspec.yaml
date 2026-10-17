@@ -1,0 +1,24 @@
+name: applemap
+description: >-
+  The system map on Apple platforms, as a Flutter widget. A thin MapKit
+  platform view: basemap, annotations, camera and the system location dot.
+version: 1.0.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.11.1
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      ios:
+        pluginClass: AppleMapPlugin
+        sharedDarwinSource: false

@@ -10,11 +10,9 @@ import '../../../theme/theme.dart';
 import '../../../components/notification.dart';
 import '../browser/page.dart';
 import '../browser/widgets/storage_card.dart';
-import '../../devices/device_scope.dart';
 import 'category/category_page.dart';
 import 'category/deleted_page.dart';
 import 'controller.dart';
-import 'rename_key.dart';
 import '../../../components/archive/category.dart';
 import '../../../components/archive/models/fap.dart';
 import '../../../components/archive/models/key.dart';
@@ -23,52 +21,50 @@ import '../../../components/filelist/empty_view.dart';
 import 'widgets/key_actions_sheet.dart';
 import '../../../components/filelist/progress_fill.dart';
 import 'widgets/sync_progress_view.dart';
-import 'failure_toast.dart';
-import '../../../services/archive/sort_settings.dart';
 
 class ArchivePage extends StatefulWidget {
-  const ArchivePage({
-    super.key,
-    required this.controller,
-    required this.sortSettings,
-  });
+  const ArchivePage({super.key, this.controller});
 
-  /// Built and owned by [AppShell], which keeps it across slot changes - so
-  /// this page neither creates nor disposes one.
-  final ArchiveController controller;
-
-  /// Carried only to hand on to the two tables this page pushes. Nothing on
-  /// this screen is sorted by it.
-  final ArchiveSortSettings sortSettings;
+  final ArchiveController? controller;
 
   @override
   State<ArchivePage> createState() => _ArchivePageState();
 }
 
 class _ArchivePageState extends State<ArchivePage> {
-  ArchiveController get _ctrl => widget.controller;
+  late final ArchiveController _ctrl;
+  late final bool _ownsController;
 
-  // Both of these load in initState - the category page its metadata, the
-  // deleted page its list - and both were missed by the first pass over this
-  // file, which guarded the storage cards two methods below and left the
-  // category cards above them alone. The push-site census is what found them.
-  // #244.
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = widget.controller ?? ArchiveController();
+    _ownsController = widget.controller == null;
+    if (_ownsController) {
+      _ctrl.initialize();
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_ownsController) {
+      _ctrl.dispose();
+    }
+    super.dispose();
+  }
+
   void _openCategory(ArchiveCategory cat) {
-    pushPage(
-      context,
-      (_) => CategoryPage(
-        controller: _ctrl,
-        sortSettings: widget.sortSettings,
-        category: cat,
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CategoryPage(controller: _ctrl, category: cat),
       ),
     );
   }
 
   void _openDeleted() {
-    pushPage(
+    Navigator.of(
       context,
-      (_) => DeletedPage(controller: _ctrl, sortSettings: widget.sortSettings),
-    );
+    ).push(MaterialPageRoute(builder: (_) => DeletedPage(controller: _ctrl)));
   }
 
   Widget _categoriesCard(BuildContext context) {
@@ -126,12 +122,10 @@ class _ArchivePageState extends State<ArchivePage> {
   }
 
   void _openFileManager(String initialPath) {
-    // The file manager lists the path in initState, so a second tap is a
-    // second listing as well as a second page. #244.
-    final client = DeviceScope.of(context).client;
-    pushPage(
-      context,
-      (_) => FileManagerPage(client: client, initialPath: initialPath),
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => FileManagerPage(initialPath: initialPath),
+      ),
     );
   }
 
@@ -144,17 +138,12 @@ class _ArchivePageState extends State<ArchivePage> {
       return;
     }
     final ok = await _ctrl.launchFapFavorite(fav);
-    // Null: see launchFapFavorite. The tap that started it owns the outcome.
-    if (!mounted || ok == null) return;
+    if (!mounted) return;
     if (ok) {
       unawaited(openRoute(context, AppRoute.remoteControl));
     } else {
       context.showNotification(
-        withArchiveReason(
-          context,
-          context.l10n.archiveLaunchFailed(fav.name),
-          _ctrl.lastFailure,
-        ),
+        context.l10n.archiveLaunchFailed(fav.name),
         type: QNotificationType.error,
       );
     }
@@ -205,21 +194,49 @@ class _ArchivePageState extends State<ArchivePage> {
       _ctrl,
       key,
       onRename: () => _showRenameDialog(context, key),
-      onDuplicate: () async {
-        await _ctrl.duplicateKey(key);
-        if (!context.mounted) return;
-        reportArchiveFailure(
-          context,
-          _ctrl.lastFailure,
-          context.l10n.archiveDuplicateFailed,
-        );
-      },
+      onDuplicate: () => _ctrl.duplicateKey(key),
       onToggleFavorite: () => _ctrl.toggleFavorite(key),
     );
   }
 
-  Future<void> _showRenameDialog(BuildContext context, ArchiveKey key) =>
-      promptRenameKey(context, controller: _ctrl, key: key);
+  Future<void> _showRenameDialog(BuildContext context, ArchiveKey key) async {
+    final colors = context.appColors;
+    final ctrl = TextEditingController(text: key.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: colors.dialogBackground,
+        title: Text(
+          context.l10n.fmRename,
+          style: TextStyle(color: colors.dialogText),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: TextStyle(color: colors.dialogText),
+          decoration: InputDecoration(
+            hintText: context.l10n.archiveFileName,
+            hintStyle: TextStyle(color: colors.textMuted),
+          ),
+          onSubmitted: (v) => Navigator.pop(c, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c),
+            child: Text(context.l10n.commonCancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(c, ctrl.text.trim()),
+            child: Text(context.l10n.fmRename),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (newName != null && newName.isNotEmpty && newName != key.name) {
+      await _ctrl.renameKey(key, newName);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -243,7 +260,6 @@ class _ArchivePageState extends State<ArchivePage> {
                     child: Padding(
                       padding: const EdgeInsets.only(top: 16, bottom: 4),
                       child: StorageUsageCards(
-                        client: DeviceScope.of(context).client,
                         enabled: _ctrl.isConnected,
                         onOpenInternal: () => _openFileManager('/int'),
                         onOpenExternal: () => _openFileManager('/ext'),

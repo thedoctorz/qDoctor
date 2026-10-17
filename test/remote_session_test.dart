@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flipperlib/flipperlib.dart' hide DateTime, File;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/models/models.dart';
-import 'package:qunleashed/pages/tools/remote/desktop/session.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/models/models.dart';
+import 'package:doctormobile/pages/tools/remote/desktop/session.dart';
 
 /// One request as it was handed to the client, with what the session's queue
 /// sorts on.
@@ -12,23 +12,6 @@ class _Sent {
   final Main request;
   final FlipperRequestPriority priority;
   final int seq;
-}
-
-/// The one link this fake stands for: requests made under it reach the same
-/// client, and it is alive exactly while that client is connected.
-class _FakeBinding implements FlipperSessionBinding {
-  _FakeBinding(this._client);
-
-  final _FakeClient _client;
-
-  @override
-  FlipperDevice? get device => null;
-
-  @override
-  bool get isAlive => _client.isConnected;
-
-  @override
-  T run<T>(T Function() body) => body();
 }
 
 class _FakeClient implements FlipperClient {
@@ -99,9 +82,6 @@ class _FakeClient implements FlipperClient {
 
   @override
   bool get isConnected => connected;
-
-  @override
-  FlipperSessionBinding bindCurrentSession() => _FakeBinding(this);
 
   @override
   Stream<Main> get broadcastStream => broadcast.stream;
@@ -190,10 +170,13 @@ void main() {
     );
   });
 
-  test('a failed open is not retried', () async {
+  test('a failed open marks the page disconnected without retrying', () async {
     final client = _FakeClient()..failCalls = true;
     final session = RemoteSession(client: client);
     addTearDown(session.dispose);
+
+    await Future<void>.delayed(Duration.zero);
+    expect(session.isDisconnected, isTrue);
 
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(client.startStreamCalls, 1, reason: 'nothing automatic behind it');
@@ -332,29 +315,34 @@ void main() {
     );
   });
 
-  // The link says whether the page is connected, not the frames: a drop clears
-  // the screen and stops input at once, and a reconnect restores input before
-  // the first frame lands.
+  // What the user actually sees, rather than a count of RPCs. Note which half
+  // does it: a successful open is not enough, because the indicator tracks
+  // frames arriving rather than RPCs landing - it drives a connection LED, and
+  // lighting it green over a blank screen would say the wrong thing.
   test(
-    'a drop clears the screen and input, a reconnect restores input',
+    'a frame clears the disconnected flag, a successful open does not',
     () async {
       final client = _FakeClient()..connected = true;
       final session = RemoteSession(client: client);
       addTearDown(session.dispose);
 
       await Future<void>.delayed(Duration.zero);
-      expect(session.inputAvailable, isTrue);
-
-      client.connected = false;
       client.connection.add(_link(connected: false));
       await Future<void>.delayed(Duration.zero);
-      expect(session.inputAvailable, isFalse);
-      expect(session.frameListenable.value, isNull);
+      expect(session.isDisconnected, isTrue);
 
-      client.connected = true;
       client.connection.add(_link(connected: true));
       await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(session.inputAvailable, isTrue);
+      expect(
+        session.isDisconnected,
+        isTrue,
+        reason: 'the open having succeeded is not yet evidence frames flow',
+      );
+
+      client.broadcast.add(Main(guiScreenFrame: ScreenFrame()));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(session.isDisconnected, isFalse);
     },
   );
 
@@ -426,6 +414,16 @@ void main() {
       );
     },
   );
+
+  test('an unlocked device does not read as a disconnected one', () async {
+    final client = lockAnswering(CommandStatus.ERROR);
+    final session = RemoteSession(client: client);
+    addTearDown(session.dispose);
+
+    await pumpEventQueue();
+
+    expect(session.isDisconnected, isFalse);
+  });
 
   // The direction of the mapping, which nothing else pins: every assertion
   // around it holds whether ERROR reads as locked or unlocked. Here the device
@@ -506,19 +504,30 @@ void main() {
 
   // A status that is not ERROR still has to surface: swallowing every
   // rejection as "unlocked" would turn a real RPC failure into a lock state.
-  test('a status the firmware refuses is not read as unlocked', () async {
-    final client = lockAnswering(CommandStatus.ERROR_NOT_IMPLEMENTED);
-    final session = RemoteSession(client: client);
-    addTearDown(session.dispose);
-    await pumpEventQueue();
+  // But it is not a disconnection either - the poll runs last, so the link has
+  // already answered twice by then.
+  test(
+    'a status the firmware refuses is neither unlocked nor a drop',
+    () async {
+      final client = lockAnswering(CommandStatus.ERROR_NOT_IMPLEMENTED);
+      final session = RemoteSession(client: client);
+      addTearDown(session.dispose);
+      await pumpEventQueue();
 
-    client.broadcast.add(Main()..desktopStatus = (Status()..locked = false));
-    await pumpEventQueue();
+      expect(
+        session.isDisconnected,
+        isFalse,
+        reason: 'the link answered twice',
+      );
 
-    expect(
-      session.justUnlocked,
-      isFalse,
-      reason: 'no baseline was taken, so there is no transition to report',
-    );
-  });
+      client.broadcast.add(Main()..desktopStatus = (Status()..locked = false));
+      await pumpEventQueue();
+
+      expect(
+        session.justUnlocked,
+        isFalse,
+        reason: 'no baseline was taken, so there is no transition to report',
+      );
+    },
+  );
 }

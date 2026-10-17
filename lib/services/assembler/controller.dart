@@ -4,11 +4,6 @@ import 'package:dartufbt/dartufbt.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../settings/persist.dart';
-
-import '../logging.dart';
-import '../prefs_reader.dart';
-import '../telemetry/traced.dart';
 import 'backend_mode.dart';
 import 'remote_build_service.dart';
 
@@ -123,17 +118,6 @@ class AssemblerController extends ChangeNotifier {
   UfbtInstaller get installer =>
       _installer ??= UfbtInstaller(logger: _logger, paths: UfbtPaths.resolve());
 
-  /// Where [refreshStatus] reads the deployed state from.
-  ///
-  /// A seam rather than a direct call, for two reasons. It is synchronous
-  /// disk and process work - decoding the ufbt state files, reading the
-  /// toolchain manifests, running `uname` - so a host test that does not
-  /// replace it runs against whatever is in the developer's own `~/.ufbt`.
-  /// And the guard in [refreshStatus] exists for exactly the states that
-  /// directory can be in, which is otherwise not drivable at all.
-  @visibleForTesting
-  late UfbtStatus Function() readStatus = () => installer.status();
-
   void setChannel(UfbtUpdateChannel value) {
     if (_channel == value || busy) return;
     _channel = value;
@@ -141,34 +125,16 @@ class AssemblerController extends ChangeNotifier {
   }
 
   Future<void> loadSettings() async {
-    final PrefsReader reader;
-    try {
-      reader = PrefsReader(await SharedPreferences.getInstance());
-    } catch (e, st) {
-      // `_initCore` awaits this, and both entry points await that: `main`
-      // ahead of `runApp`, `widgetMain` with no UI at all. So a rejection
-      // here is not a setting that falls back - it is an app that never
-      // appears, or a widget engine whose link keeper never comes up.
-      //
-      // installUncaughtHandlers would still record the error - and now that
-      // ADR 0013 §1 has made Sentry the only channel, it would even be
-      // reported. What it would not carry is which load failed: an uncaught
-      // rejection arrives as `[uncaught]` with nothing naming the operation,
-      // which is the same argument `guarded` makes. Caught here, it carries
-      // its area. #124.
-      LogService.warn('[Assembler] load failed: ${LogService.describe(e, st)}');
-      return;
-    }
-    final source = reader.orNull<String>(_prefSdkSource);
+    final prefs = await SharedPreferences.getInstance();
+    final source = prefs.getString(_prefSdkSource);
     _sdkSource = AssemblerSdkSource.values.firstWhere(
       (value) => value.name == source,
       orElse: () => AssemblerSdkSource.unleashed,
     );
-    _customIndexUrl = reader.or(_prefCustomIndexUrl, '');
+    _customIndexUrl = prefs.getString(_prefCustomIndexUrl) ?? '';
     _preference = AssemblerBackendPreference.parse(
-      reader.orNull<String>(_prefBackend),
+      prefs.getString(_prefBackend),
     );
-    reader.report('[Assembler]');
     refreshStatus();
     notifyListeners();
   }
@@ -181,10 +147,8 @@ class AssemblerController extends ChangeNotifier {
       refreshStatus();
     }
     notifyListeners();
-    await persistSetting(
-      _prefBackend,
-      (prefs) => prefs.setString(_prefBackend, value.name),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefBackend, value.name);
   }
 
   /// Called when a local build could not run at all — a missing toolchain
@@ -203,10 +167,8 @@ class AssemblerController extends ChangeNotifier {
     if (_sdkSource == value || busy) return;
     _sdkSource = value;
     notifyListeners();
-    await persistSetting(
-      _prefSdkSource,
-      (prefs) => prefs.setString(_prefSdkSource, value.name),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefSdkSource, value.name);
   }
 
   Future<void> setCustomIndexUrl(String value) async {
@@ -214,10 +176,8 @@ class AssemblerController extends ChangeNotifier {
     if (_customIndexUrl == url) return;
     _customIndexUrl = url;
     notifyListeners();
-    await persistSetting(
-      _prefCustomIndexUrl,
-      (prefs) => prefs.setString(_prefCustomIndexUrl, url),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefCustomIndexUrl, url);
   }
 
   static const Duration _probeTtl = Duration(minutes: 5);
@@ -273,24 +233,7 @@ class AssemblerController extends ChangeNotifier {
 
   void refreshStatus() {
     if (!isSupported) return;
-    try {
-      _status = readStatus();
-    } catch (e, st) {
-      // Synchronous disk and process work: it decodes the ufbt state files,
-      // reads the toolchain manifests, and shells out to `uname`. A state
-      // file half-written by a power cut, an unreadable ~/.ufbt, or a PATH
-      // without `uname` all throw here.
-      //
-      // Nine callers and none of them caught, including loadSettings - which
-      // _initCore awaits before there is a UI, so this was a blank launch
-      // from a file the app itself wrote. #124.
-      //
-      // _status keeps whatever it had, null on a first call, which reads as
-      // nothing deployed. Wrong, but the settings page probes again.
-      LogService.warn(
-        '[Assembler] status failed: ${LogService.describe(e, st)}',
-      );
-    }
+    _status = installer.status();
     notifyListeners();
   }
 
@@ -332,70 +275,44 @@ class AssemblerController extends ChangeNotifier {
 
   String? get buildAlias => _buildAlias;
 
-  /// Timed as one operation — ADR 0013 §3 asks for the ufbt job to become a
-  /// span, and this is the one place a build runs.
-  ///
-  /// [alias] is deliberately **not** attached. It is the user's own name for
-  /// their project, and no pattern in `Scrub` recognises one - so there is
-  /// nothing between it and a report. The operation name is enough to answer
-  /// "are builds slow".
-  ///
-  /// `traced` goes inside the busy check, so a rejected call is not recorded
-  /// as a build that took no time.
   Future<T> runBuild<T>(String alias, Future<T> Function() action) async {
     if (busy) {
       throw StateError('Assembler is busy: ${_job.name}');
     }
-    return traced('assembler.build', (trace) async {
-      _job = AssemblerJob.build;
-      _buildAlias = alias;
+    _job = AssemblerJob.build;
+    _buildAlias = alias;
+    _progress = null;
+    notifyListeners();
+    try {
+      return await action();
+    } finally {
+      _job = AssemblerJob.none;
+      _buildAlias = null;
       _progress = null;
       notifyListeners();
-      try {
-        return await action();
-      } finally {
-        _job = AssemblerJob.none;
-        _buildAlias = null;
-        _progress = null;
-        notifyListeners();
-      }
-    });
+    }
   }
 
-  /// Timed per job, so install, update and the rest are told apart rather
-  /// than lumped under one name.
-  ///
-  /// `trace.failed()` because this catches its own failure and answers
-  /// `false`: without it a failed SDK install would arrive as a successful
-  /// operation. The same reason `FirmwareInstaller.install` needs it.
   Future<bool> _run(AssemblerJob job, Future<bool> Function() action) async {
     if (busy || !isSupported) return false;
-    return traced('assembler.${job.name}', (trace) async {
-      _job = job;
+    _job = job;
+    _progress = null;
+    notifyListeners();
+    var ok = false;
+    try {
+      ok = await action();
+    } catch (e) {
+      _logger.error('Failed to run operation: $e');
+    } finally {
+      _job = AssemblerJob.none;
       _progress = null;
+      _status = installer.status();
+      // A fresh SDK or toolchain is the answer to whatever broke the local
+      // builds, so they get another chance right away.
+      if (ok) _localFaulted = false;
       notifyListeners();
-      var ok = false;
-      try {
-        ok = await action();
-        if (!ok) trace.failed();
-      } catch (e) {
-        trace.failed('$e');
-        _logger.error('Failed to run operation: $e');
-      } finally {
-        _job = AssemblerJob.none;
-        _progress = null;
-        // A fresh SDK or toolchain is the answer to whatever broke the local
-        // builds, so they get another chance right away.
-        if (ok) _localFaulted = false;
-        // Through refreshStatus for its catch: this runs in a finally, so an
-        // unreadable ufbt state here would replace whatever the operation was
-        // reporting with a filesystem error from the cleanup. Unpinned - no
-        // test drives _run, which would want the installer faked and not just
-        // readStatus - so a change back to a bare readStatus() passes.
-        refreshStatus();
-      }
-      return ok;
-    });
+    }
+    return ok;
   }
 
   void _onEvent(UfbtLogEvent event) {
@@ -408,17 +325,6 @@ class AssemblerController extends ChangeNotifier {
             event.level,
           ),
         );
-        // ADR 0013 §3: `error` and `critical` reached only the Assembler
-        // console, which is a screen in one feature and nothing a bug report
-        // can carry. They are reported now, like every other failure the
-        // app records - and from there to Sentry while reporting is on.
-        //
-        // `warning` and below stay where they are. The console is a build log
-        // and most of its traffic is ordinary toolchain chatter; admitting it
-        // would churn the 500-entry buffer the failure's own context lives in.
-        if (event.level.severity >= UfbtLogLevel.error.severity) {
-          LogService.error('[Assembler] ${event.formatted}');
-        }
       case UfbtBuildEvent():
         for (final line in event.formatted.split('\n')) {
           _append(AssemblerLine(line, AssemblerLineKind.build));

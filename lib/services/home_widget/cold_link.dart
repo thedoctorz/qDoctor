@@ -6,16 +6,17 @@ import '../connection/known_devices.dart';
 import '../logging.dart';
 
 /// The bare link a home-screen widget needs: the last remembered BLE device,
-/// dialled straight by its address and answering a ping. Nothing is scanned
-/// for and nothing else is requested — no device info, no battery, no
-/// archive — so the file goes out as soon as the radio is up. When the app is
-/// opened later, the device page finds the live session and fills in the rest.
+/// connected and answering a ping. Nothing else is requested — no device
+/// info, no battery, no archive — so the file goes out as soon as the radio
+/// is up. When the app is opened later, the device page finds the live
+/// session and fills in the rest.
 class ColdLink {
   ColdLink._();
 
   static final ColdLink instance = ColdLink._();
 
   static const Duration _connectingWait = Duration(seconds: 15);
+  static const Duration _scanTimeout = Duration(seconds: 8);
 
   Future<bool>? _inFlight;
 
@@ -38,15 +39,37 @@ class ColdLink {
     }
 
     try {
-      await client.connectBleAddress(last.id, name: last.name);
+      await client.refreshBleKnown();
+    } catch (e) {
+      LogService.info('[ColdLink] known refresh failed: $e');
+    }
+    var device = _find(client, last);
+    if (device == null) {
+      // The library keeps scanning a while after the first Flipper shows up,
+      // to list them all; the widget only wants this one, so the scan ends
+      // the moment it appears.
+      final seen = client.devicesStream.listen((_) {
+        if (_find(client, last) != null) unawaited(client.stopScan());
+      });
+      try {
+        await client.scanBle(timeout: _scanTimeout);
+      } catch (e) {
+        LogService.info('[ColdLink] scan failed: $e');
+      } finally {
+        await seen.cancel();
+      }
+      device = _find(client, last);
+    }
+    if (device == null) {
+      LogService.info('[ColdLink] ${last.name} not found');
+      return false;
+    }
+
+    try {
+      await client.connect(device);
       await client.ping(PingRequest(data: const [0x51, 0x55]));
     } catch (e) {
-      // The only way a home-screen widget reaches a Flipper, and it runs in
-      // the headless isolate where there is no UI to put anything in - the
-      // widget just draws its "no device" face, which is the same face it
-      // draws when none is remembered. The false below is the whole report,
-      // and it says nothing about which of the two happened.
-      LogService.warn('[ColdLink] connect failed: $e');
+      LogService.info('[ColdLink] connect failed: $e');
       return false;
     }
     return client.isConnected;
@@ -61,5 +84,12 @@ class ColdLink {
     } catch (_) {
       return client.isConnected;
     }
+  }
+
+  FlipperDevice? _find(FlipperClient client, KnownDevice known) {
+    for (final device in client.devices) {
+      if (known.matches(device)) return device;
+    }
+    return null;
   }
 }

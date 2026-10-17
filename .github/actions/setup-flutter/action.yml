@@ -19,9 +19,8 @@ inputs:
     default: "3.47.1"
   pub-get:
     description: >
-      Set to "false" to install the SDK without fetching dependencies, and to
-      skip the translation preflight with it. Only the Crowdin sync does, and
-      crowdin-rx.yml says why where it does it.
+      Set to "false" to install the SDK without fetching dependencies, when a
+      job needs to run pub get itself and inspect the output.
     required: false
     default: "true"
   swift-package-manager:

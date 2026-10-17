@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/mifare/static_encrypted_recoverer.dart';
+import 'package:doctormobile/pages/tools/mifare/static_encrypted_recoverer.dart';
 
 StaticNonce _nonce({
   int cuid = 0x5bcbb2e4,

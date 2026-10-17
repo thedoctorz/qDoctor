@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'package:flipperlib/flipperlib.dart';
 import 'package:flutter/material.dart';
@@ -7,7 +6,6 @@ import 'package:flutter/material.dart';
 import '../pages/tools/infrared/local_repo.dart';
 import '../services/connection/device_info_watch.dart';
 import '../services/connection/foreground_service.dart';
-import '../services/connection/link_service.dart';
 import '../services/connection/notification_service.dart';
 import '../services/guarded.dart';
 import '../services/notifications/push_service.dart';
@@ -20,8 +18,6 @@ import '../services/rpc/network/network_responder.dart';
 void bootstrapAmbientServices() {
   final client = FlipperOneClient().get();
 
-  LinkService.instance.start(client);
-
   _start(
     'connection notifier',
     () => ConnectionNotificationService.instance.start(client),
@@ -32,15 +28,10 @@ void bootstrapAmbientServices() {
     () => BleForegroundService.instance.start(client),
   );
 
-  // Answers GPS requests from custom firmware apps with the phone's location.
   final gps = GeolocatorGpsProvider();
   client.attachGpsResponder(gps);
 
-  // Desktop raises the prompt at launch instead of mid-request: there the ask
-  // arrives when the map opens or the Flipper is already waiting for a fix.
-  if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
-    _start('location permission', gps.ensureReady);
-  }
+  _start('location permission', gps.ensureReady);
 
   // Answers network requests from custom firmware apps with the phone's
   // internet connection.
@@ -87,8 +78,7 @@ class _WatchLifecycleObserver with WidgetsBindingObserver {
 /// awaits any of these - the app comes up either way - and a signature that
 /// cannot be awaited says so better than an unawaited() at each site did.
 ///
-/// Tagged like every other kept line, because these now reach the reporting
-/// channel and the label is what makes one searchable there; before, at info,
-/// they reached nothing.
+/// Tagged like every other kept entry, because these now reach the log screen
+/// a user copies into a bug report; before, at info, they reached nothing.
 void _start(String label, Future<void> Function() task) =>
     unawaited(guarded('[Bootstrap] ambient service "$label"', task));

@@ -5,8 +5,8 @@ import '../localization/l10n.dart';
 class NotificationCenter {
   NotificationCenter._();
   static final NotificationCenter instance = NotificationCenter._();
-  static const String _windowsAppName = 'qUnleashed';
-  static const String _windowsAppUserModelId = 'com.darkflippers.qunleashed';
+  static const String _windowsAppName = 'DoctorMobile';
+  static const String _windowsAppUserModelId = 'com.doctormobile.app';
   static const String _windowsGuid = 'd3b5f2a1-7c4e-4b9a-9f1e-2a6c8d0e4f71';
 
   final FlutterLocalNotificationsPlugin _plugin =

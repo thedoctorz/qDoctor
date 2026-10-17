@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/mifare/nested_models.dart';
-import 'package:qunleashed/pages/tools/mifare/nested_nonce_parser.dart';
+import 'package:doctormobile/pages/tools/mifare/nested_models.dart';
+import 'package:doctormobile/pages/tools/mifare/nested_nonce_parser.dart';
 
 void main() {
   group('NestedNonceParser', () {

@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:qunleashed/pages/tools/mifare/cuid_dict_format.dart';
+import 'package:doctormobile/pages/tools/mifare/cuid_dict_format.dart';
 
 Uint64List _keys(List<int> values) => Uint64List.fromList(values);
 

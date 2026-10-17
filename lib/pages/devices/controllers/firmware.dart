@@ -7,12 +7,11 @@ import '../../../theme/theme.dart';
 import '../firmware/directory.dart';
 import '../firmware/repository.dart';
 import '../firmware/update_settings.dart';
-import '../../../services/guarded.dart';
 
 class FirmwareController extends ChangeNotifier {
   FirmwareController() {
     _repo.addListener(_onRepoChanged);
-    unawaited(guarded('[Firmware] restore selections', _restore));
+    unawaited(_restore());
     _repo.prefetchAll();
   }
 
@@ -22,17 +21,15 @@ class FirmwareController extends ChangeNotifier {
 
   final Map<String, _Selection> _selections = {};
 
-  /// What [entry]'s directory is doing. See [FirmwareFetchState].
-  ///
-  /// Before #118 this was a bool derived from a missing directory, and a fetch
-  /// that failed never gets one - so the card's version line read "Checking…"
-  /// and its channel dropdown "Loading…" for the rest of the session, on every
-  /// firmware, with nothing anywhere to say why.
-  FirmwareFetchState fetchStateFor(FirmwareEntry entry) =>
-      _repo.stateFor(entry);
+  bool fetchLoadingFor(FirmwareEntry entry) {
+    if (entry.localFile) return false;
+    return _repo.isLoading(entry) || _repo.directoryFor(entry) == null;
+  }
 
-  List<FirmwareDirectoryChannel> channelsFor(FirmwareEntry entry) =>
-      _channelsForDirectory(_repo.directoryFor(entry));
+  List<FirmwareDirectoryChannel> channelsFor(FirmwareEntry entry) {
+    if (entry.localFile) return const [];
+    return _channelsForDirectory(_repo.directoryFor(entry));
+  }
 
   /// Set once the controller is gone, so the stored-settings read - which is
   /// started in the constructor and cannot be cancelled - does not notify a
@@ -41,6 +38,7 @@ class FirmwareController extends ChangeNotifier {
   bool _disposed = false;
 
   String selectedChannelId(FirmwareEntry entry) {
+    if (entry.localFile) return kCustomFirmwareChannelId;
     final selected = _selections[entry.shortName]?.channelId;
     if (selected != null && selected.isNotEmpty) return selected;
     return kCustomFirmwareChannelId;
@@ -84,12 +82,7 @@ class FirmwareController extends ChangeNotifier {
     // still held it.
     // Only the channel: the variant sitting in the selection may be a default
     // nobody chose, and writing it would make it look like one they did.
-    unawaited(
-      guarded(
-        '[Firmware] remember channel',
-        () => _settings.remember(entry.shortName, channelId: channelId),
-      ),
-    );
+    unawaited(_settings.remember(entry.shortName, channelId: channelId));
     notifyListeners();
   }
 
@@ -97,12 +90,7 @@ class FirmwareController extends ChangeNotifier {
     final selection = _selectionFor(entry.shortName);
     selection.variant = variant;
     selection.variantPicked = true;
-    unawaited(
-      guarded(
-        '[Firmware] remember variant',
-        () => _settings.remember(entry.shortName, variant: variant),
-      ),
-    );
+    unawaited(_settings.remember(entry.shortName, variant: variant));
     notifyListeners();
   }
 
@@ -149,6 +137,7 @@ class FirmwareController extends ChangeNotifier {
   }
 
   void _applyChannelFallback(FirmwareEntry entry) {
+    if (entry.localFile) return;
     final selection = _selectionFor(entry.shortName);
     final directory = _repo.directoryFor(entry);
     // Nothing has been fetched yet, so the only channel on offer is the custom
@@ -159,6 +148,7 @@ class FirmwareController extends ChangeNotifier {
     // is every cold start, not an edge case.
     if (directory == null && selection.channelId != null) return;
     final channels = _channelsForDirectory(directory);
+    if (channels.isEmpty) return;
     final selected = selection.channelId;
     final match = _matchChannel(channels, selected);
     final hasReal = channels.any((c) => c.id != kCustomFirmwareChannelId);
@@ -207,7 +197,7 @@ class FirmwareController extends ChangeNotifier {
     final real = (dir?.channels ?? const <FirmwareDirectoryChannel>[])
         .where((channel) => channel.hasVersions)
         .toList();
-    return [...real, buildCustomChannel()];
+    return real;
   }
 
   bool _supportsVariantSelection(FirmwareEntry entry, String channelId) {

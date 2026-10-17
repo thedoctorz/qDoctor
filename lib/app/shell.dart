@@ -1,6 +1,3 @@
-import 'dart:async';
-
-import 'package:flipperlib/flipperlib.dart' hide DateTime, File;
 import 'package:flutter/material.dart';
 
 import 'nav_bar.dart';
@@ -19,10 +16,6 @@ import '../pages/devices/controllers/device.dart';
 import '../pages/devices/device_scope.dart';
 import '../pages/devices/models/connection_state.dart';
 import '../pages/devices/page.dart';
-import '../pages/option/diagnostics_notice.dart';
-import '../pages/option/diagnostics_scope.dart';
-import '../services/archive/sort_settings.dart';
-import '../services/guarded.dart';
 import '../services/home_widget/service.dart';
 import '../services/localization/l10n.dart';
 import '../services/notifications/push_intent.dart';
@@ -30,12 +23,7 @@ import '../services/notifications/push_service.dart';
 import '../theme/theme.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.client});
-
-  /// The Flipper the archive this shell owns talks to. Handed down rather
-  /// than resolved here: `main.dart` calls itself the one place the client is
-  /// resolved, and it only is if everything below takes one. ADR 0002.
-  final FlipperClient client;
+  const AppShell({super.key});
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -55,14 +43,8 @@ class _AppShellState extends State<AppShell> {
   static final int _slotTools = _slotApps + 1;
   static final int _slotCount = _slotTools + 1;
 
-  late final ArchiveController _archiveController = ArchiveController(
-    client: widget.client,
-  );
-
-  /// How the archive tables are ordered. Owned here rather than by a page
-  /// because the rail keeps several of them mounted at once, and a sort the
-  /// user changes on one has to reach the others. ADR 0002.
-  final ArchiveSortSettings _archiveSort = ArchiveSortSettings();
+  final DeviceController _ctrl = DeviceController();
+  final ArchiveController _archiveController = ArchiveController();
 
   int _slot = _slotDevice;
 
@@ -75,35 +57,12 @@ class _AppShellState extends State<AppShell> {
     super.initState();
     _archiveController.addListener(_onArchiveChanged);
     _archiveController.initialize();
-    // Started as early as there is anywhere to start it, so the stored sort
-    // is normally in hand before an archive table is reachable - but this is
-    // a platform round trip and nothing waits for it. A table opened before
-    // it lands shows name ascending and reorders once when it arrives, and
-    // `ArchiveSortSettings` holds off the read for a user who picked first.
-    //
-    // `load` never rejects; `guarded` is for the dropped future, not the
-    // error. #23.
-    unawaited(
-      guarded('[ArchiveSort] reading the stored sort', _archiveSort.load),
-    );
     HomeWidgetService.instance.pickRequests.addListener(_onWidgetPickRequest);
     PushService.instance.taps.addListener(_onPushTap);
+    rootTabRequests.addListener(_onRootTabRequest);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _onWidgetPickRequest();
       _onPushTap();
-      // ADR 0013 §1's one-time notice, raised here because here is the first
-      // frame on the one entry point that has a window: `_initCore` must never
-      // throw and has no UI, and `widgetMain()`'s headless isolate never
-      // reaches this widget at all. A notice marked shown there would be a
-      // notice the user never saw.
-      //
-      // `guarded` because a post-frame callback is a void slot: the future
-      // would otherwise be dropped and a rejection would land as `[uncaught]`
-      // naming nothing. #23.
-      guarded(
-        '[Diagnostics] raising the sharing notice',
-        () => showDiagnosticsNoticeIfDue(context, DiagnosticsScope.of(context)),
-      );
     });
   }
 
@@ -113,9 +72,11 @@ class _AppShellState extends State<AppShell> {
       _onWidgetPickRequest,
     );
     PushService.instance.taps.removeListener(_onPushTap);
+    rootTabRequests.removeListener(_onRootTabRequest);
+    _ctrl.dispose();
     _archiveController.removeListener(_onArchiveChanged);
     _archiveController.dispose();
-    _archiveSort.dispose();
+    _ctrl.client.disconnectAll();
     super.dispose();
   }
 
@@ -132,6 +93,13 @@ class _AppShellState extends State<AppShell> {
         ),
       ),
     );
+  }
+
+  void _onRootTabRequest() {
+    final tab = rootTabRequests.value;
+    if (tab == null || !mounted) return;
+    rootTabRequests.value = null;
+    _select(_slotOfTab(tab));
   }
 
   Future<void> _onPushTap() async {
@@ -158,24 +126,23 @@ class _AppShellState extends State<AppShell> {
     final slot = _visibleSlot(wide);
     _mounted.add(slot);
 
-    // Provided above the Navigator now, so this reads it like every other
-    // page rather than owning it - ADR 0011.
-    final device = DeviceScope.of(context);
-
-    return ListenableBuilder(
-      listenable: device,
-      builder: (context, _) {
-        return FlipperRootScaffold(
-          currentTab: _tabOf(slot),
-          onTabSelected: (tab) => _select(_slotOfTab(tab)),
-          deviceLabel: _deviceLabel(device),
-          railGroups: _railGroups(colors, slot),
-          child: IndexedStack(
-            index: slot,
-            children: [for (var i = 0; i < _slotCount; i++) _page(i, wide)],
-          ),
-        );
-      },
+    return DeviceScope(
+      notifier: _ctrl,
+      child: ListenableBuilder(
+        listenable: _ctrl,
+        builder: (context, _) {
+          return FlipperRootScaffold(
+            currentTab: _tabOf(slot),
+            onTabSelected: (tab) => _select(_slotOfTab(tab)),
+            deviceLabel: _deviceLabel(),
+            railGroups: _railGroups(colors, slot),
+            child: IndexedStack(
+              index: slot,
+              children: [for (var i = 0; i < _slotCount; i++) _page(i, wide)],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -228,31 +195,19 @@ class _AppShellState extends State<AppShell> {
     if (!wide && _isArchiveDetail(slot)) return const SizedBox.shrink();
     if (slot == _slotDevice) return const DeviceTab();
     if (slot == _slotArchive) {
-      return ArchivePage(
-        controller: _archiveController,
-        sortSettings: _archiveSort,
-      );
+      return ArchivePage(controller: _archiveController);
     }
     if (slot == _slotFavorites) {
-      return FavoritesPage(
-        controller: _archiveController,
-        sortSettings: _archiveSort,
-      );
+      return FavoritesPage(controller: _archiveController);
     }
-    if (slot == _slotFiles) {
-      return FileManagerPage(client: widget.client, initialPath: '/ext');
-    }
+    if (slot == _slotFiles) return const FileManagerPage(initialPath: '/ext');
     if (slot == _slotDeleted) {
-      return DeletedPage(
-        controller: _archiveController,
-        sortSettings: _archiveSort,
-      );
+      return DeletedPage(controller: _archiveController);
     }
     if (slot == _slotApps) return const AppsCatalogPage();
     if (slot == _slotTools) return const ToolsPage();
     return CategoryPage(
       controller: _archiveController,
-      sortSettings: _archiveSort,
       category: ArchiveCategory.values[slot - _slotCategory],
     );
   }
@@ -335,11 +290,11 @@ class _AppShellState extends State<AppShell> {
     );
   }
 
-  String _deviceLabel(DeviceController device) {
+  String _deviceLabel() {
     final strings = l10n;
-    switch (device.connectionState) {
+    switch (_ctrl.connectionState) {
       case DeviceConnectionState.disconnected:
-        return device.device != null
+        return _ctrl.device != null
             ? strings.deviceStateDisconnected
             : strings.deviceStateNoDevice;
       case DeviceConnectionState.connecting:
@@ -349,12 +304,12 @@ class _AppShellState extends State<AppShell> {
       case DeviceConnectionState.recovering:
         return strings.deviceStateRecovering;
       case DeviceConnectionState.connected:
-        if (device.deviceLoading) return strings.deviceStateSyncing;
+        if (_ctrl.deviceLoading) return strings.deviceStateSyncing;
         switch (_syncStatus) {
           case ArchiveSyncStatus.syncing:
             return strings.deviceStateSyncing;
           case ArchiveSyncStatus.synced:
-            return device.deviceInfoConnected
+            return _ctrl.deviceInfoConnected
                 ? strings.deviceStateConnected
                 : strings.deviceStateSynced;
           case ArchiveSyncStatus.idle:

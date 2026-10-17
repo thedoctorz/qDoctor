@@ -3,7 +3,6 @@ import 'package:flipperlib/flipperlib.dart';
 import 'package:flutter/material.dart';
 
 import '../../../services/localization/l10n.dart';
-import '../../../services/logging.dart';
 import '../../../components/config.dart';
 import '../../../theme/theme.dart';
 import '../../../components/notification.dart';
@@ -14,27 +13,22 @@ import '../firmware/installer.dart';
 import '../firmware/matcher.dart';
 import '../firmware/source.dart';
 import '../firmware/update_state.dart';
-import '../firmware/update_tracker.dart';
 
 class FirmwareUpdateButton extends StatefulWidget {
   const FirmwareUpdateButton({
     super.key,
     required this.entry,
-    required this.fetchState,
+    required this.fetchLoading,
     required this.latestVersion,
     required this.deviceVersion,
     required this.deviceInfo,
     required this.selectedChannelId,
     required this.selectedVariant,
     required this.client,
-    @visibleForTesting this.install,
   });
 
   final FirmwareEntry entry;
-
-  /// What the firmware directory is doing. See [FirmwareFetchState].
-  final FirmwareFetchState fetchState;
-
+  final bool fetchLoading;
   final String? latestVersion;
   final String? deviceVersion;
   final Map<String, String> deviceInfo;
@@ -42,76 +36,24 @@ class FirmwareUpdateButton extends StatefulWidget {
   final UnleashedVariant selectedVariant;
   final FlipperClient client;
 
-  /// Stands in for [FirmwareInstaller.install].
-  ///
-  /// For tests, and a constructor argument rather than a static so nothing can
-  /// replace the flasher process-wide: the widget under test gets its own and
-  /// no other instance is touched. The state the failure path below exists to
-  /// leave - `UpdateWaitingForReconnect` - is emitted only from the DFU
-  /// recovery path, which runs a real flash over FFI, so there is no other way
-  /// to reach it from a test.
-  @visibleForTesting
-  final Future<UpdateState> Function({
-    required FirmwareSource source,
-    required FlipperClient client,
-    required void Function(UpdateState) onState,
-  })?
-  install;
-
   @override
   State<FirmwareUpdateButton> createState() => _FirmwareUpdateButtonState();
 }
 
 class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
-  final FirmwareUpdateTracker _tracker = FirmwareUpdateTracker.instance;
-
-  /// The Flipper this button is speaking about: the one on screen, not the one
-  /// an update is running on. They differ exactly while the user has switched
-  /// away from a flash in progress, and then this button is about the device
-  /// they switched to and must offer that device's own choices.
-  String? get _deviceId => widget.client.scopedDeviceId;
-
-  /// What the flash ended as, for the button that was on screen to see it.
-  ///
-  /// Only a running update needs to survive a device switch, and only that goes
-  /// into the tracker. An outcome does not: once the flash is over the device
-  /// itself is the answer - it reboots, reports its new firmware, and the
-  /// ordinary comparison takes over - so keeping outcomes in the shared tracker
-  /// would leave a "done" sitting on the button for the rest of the run.
-  UpdateState? _outcome;
-
-  UpdateState? get _updateState =>
-      _tracker.stateFor(_deviceId, widget.entry.shortName) ?? _outcome;
-
-  static bool _isOutcome(UpdateState state) =>
-      state is UpdateDone || state is UpdateError;
-
+  UpdateState? _updateState;
   String? _inlineMessage;
 
   bool _dfuPresent = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _tracker.addListener(_onTrackerChanged);
-  }
-
-  @override
-  void dispose() {
-    _tracker.removeListener(_onTrackerChanged);
-    super.dispose();
-  }
-
-  void _onTrackerChanged() {
-    if (mounted) setState(() {});
-  }
 
   late QAppColors _colors;
 
   Color get _activeColor => widget.entry.colors.primary;
   Color get _inactiveColor => _colors.textMuted;
 
-  bool get _isCustom => widget.selectedChannelId == kCustomFirmwareChannelId;
+  bool get _isCustom =>
+      widget.entry.localFile ||
+      widget.selectedChannelId == kCustomFirmwareChannelId;
 
   bool get _dfuOnly => !widget.client.isConnected && _dfuPresent;
 
@@ -131,7 +73,6 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
         state is UpdateVerifying ||
         state is UpdateUploading ||
         state is UpdateStarting ||
-        state is UpdateInstalling ||
         state is UpdateRecovering ||
         state is UpdateWaitingForReconnect;
   }
@@ -160,7 +101,7 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
             progressColor: fillColor,
             progress: isIndeterminate ? null : progress?.value,
             indeterminate: isIndeterminate,
-            onPressed: (state.enabled && !_starting) ? _onPressed : null,
+            onPressed: state.enabled ? _onPressed : null,
             textStyle: ProgressButton.defaultTextStyle.copyWith(
               color: QAppColors.onColorFor(borderColor),
             ),
@@ -182,35 +123,9 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
     );
   }
 
-  // True from the moment the handler is entered until the tracker has a state
-  // of its own.
-  //
-  // _inProgress cannot do this job: it is derived from the tracker, which only
-  // learns about an update at _tracker.publish() - and on the custom-archive
-  // branch that is *after* an await on a native file picker. For the picker's
-  // whole lifetime the button stayed enabled and this handler re-entrant, so
-  // two picks ran two concurrent FirmwareInstaller.install calls: interleaved
-  // storageWriteChunked into the same /ext/update/<dir>, and two runUpdate
-  // commands. The remote branch has no such gap, because everything before
-  // publish() there is synchronous.
-  //
-  // Part of the button's enabled condition as well as the handler's guard, so a
-  // second click is refused rather than silently doing nothing.
-  bool _starting = false;
-
   Future<void> _onPressed() async {
-    if (_inProgress || _starting) return;
-    setState(() => _starting = true);
-    try {
-      await _startUpdate();
-    } finally {
-      // Only when still mounted: nothing reads _starting once the State is
-      // gone, and setState after dispose throws.
-      if (mounted) setState(() => _starting = false);
-    }
-  }
+    if (_inProgress) return;
 
-  Future<void> _startUpdate() async {
     if (!widget.client.isConnected && !_dfuPresent) {
       QNotification.show(
         context,
@@ -220,72 +135,18 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
       return;
     }
 
-    final device = _dfuOnly ? DeviceScope.of(context) : null;
+    final recovering = _dfuOnly;
+    final device = recovering ? DeviceScope.of(context) : null;
 
     final FirmwareSource source;
     if (_isCustom) {
-      final FilePickerResult? result;
-      try {
-        result = await FilePicker.platform.pickFiles(
-          dialogTitle: l10n.fwuPickArchiveTitle,
-          type: FileType.custom,
-          allowedExtensions: const ['tgz', 'gz', 'tar'],
-        );
-      } catch (e, st) {
-        // A plugin that is missing or refuses on this platform rejects here,
-        // and this method is reached from a VoidCallback - so without a catch
-        // the rejection is discarded and lands in the log as [uncaught] with
-        // nothing naming it, while on screen the button just flicks back to
-        // enabled and no dialog ever appeared. The archive browser wraps the
-        // same API for the same reason.
-        LogService.error(
-          '[Firmware] the archive picker failed: ${LogService.describe(e, st)}',
-        );
-        if (!mounted) return;
-        QNotification.show(
-          context,
-          message: l10n.fwuAborted('$e'),
-          type: QNotificationType.error,
-        );
-        return;
-      }
-      // Cancelled. Genuinely nothing to report.
-      if (result == null) return;
-      // Separate from the cancel above, because it is not one: a file *was*
-      // chosen and came back without a usable path. `files.single` would also
-      // throw on an empty or multi-element list, which this answers instead of
-      // discarding as above.
-      final files = result.files;
-      final picked = files.length == 1 ? files.single.path : null;
-      if (picked == null) {
-        LogService.warn(
-          '[Firmware] the picker returned ${files.length} file(s) and no '
-          'usable path; nothing was flashed',
-        );
-        if (!mounted) return;
-        QNotification.show(
-          context,
-          message: l10n.fwuAborted('no usable path'),
-          type: QNotificationType.error,
-        );
-        return;
-      }
-      // The picker is the one await here that can outlive this widget - the
-      // dialog is modal to the OS, not to Flutter, so the page behind it can be
-      // navigated away or rebuilt while it is open. Without this the setState
-      // below throws "setState() called after dispose()" from an async gap, and
-      // the flash starts anyway with nothing on screen to report it.
-      if (!mounted) {
-        // Said out loud: the archive was accepted and is being thrown away. If
-        // the page was merely rebuilt the button is sitting there looking
-        // ready, and "I picked the file and nothing happened" would otherwise
-        // arrive with no line for it anywhere.
-        LogService.warn(
-          '[Firmware] an archive was chosen but the button was gone before the '
-          'flash could start; nothing was written',
-        );
-        return;
-      }
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: l10n.fwuPickArchiveTitle,
+        type: FileType.custom,
+        allowedExtensions: const ['tgz', 'gz', 'tar'],
+      );
+      final picked = result?.files.single.path;
+      if (picked == null) return;
       source = LocalFirmwareSource(picked);
     } else {
       source = RemoteFirmwareSource(
@@ -298,51 +159,25 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
 
     device?.setRecovering(true);
 
-    // Captured before the flash starts, and used for every report it makes:
-    // the progress belongs to the Flipper being written, not to whichever one
-    // the user is looking at by the time a frame of it arrives.
-    final target = _deviceId;
     setState(() {
       _inlineMessage = null;
-      _outcome = null;
+      _updateState = source.isRemote
+          ? const UpdateFetching()
+          : const UpdateUploading(0);
     });
-    _tracker.publish(
-      target,
-      widget.entry.shortName,
-      source.isRemote ? const UpdateFetching() : const UpdateUploading(0),
-    );
 
     var waitForReconnect = false;
     try {
-      final outcome = await (widget.install ?? FirmwareInstaller.install)(
+      await FirmwareInstaller.install(
         source: source,
         client: widget.client,
-        onState: (state) => _onState(target, state),
+        onState: _onState,
       );
-      // The outcome decides this, not a prediction made at press time. It used
-      // to be guarded on `_dfuOnly` read before the archive was fetched, but
-      // install() picks the DFU path from client.isConnected much later - so a
-      // link that dropped during a 90-second download flashed over DFU and
-      // was then never waited for, leaving the button disabled on RESTARTING
-      // for good. #118.
-      //
-      // Read from what install() returned rather than from the last state it
-      // published. Both answer the same today, and only because
-      // UpdateWaitingForReconnect happens to be terminal - one trailing
-      // emission anywhere in install() and the latch came back with every
-      // test here still green. #132.
-      waitForReconnect = outcome is UpdateWaitingForReconnect;
-    } catch (e, st) {
-      // FirmwareInstaller.install keeps its own failures, but the temp
-      // directory it creates before that try is outside it - a full disk or an
-      // unwritable temp path arrives here, and used to leave the log with
-      // nothing while the user got a raw toString in a toast.
-      LogService.error(
-        '[Firmware] install aborted: ${LogService.describe(e, st)}',
-      );
-      _tracker.clear(target);
+      waitForReconnect =
+          recovering && _updateState is UpdateWaitingForReconnect;
+    } catch (e) {
       if (!mounted) return;
-      setState(() => _outcome = null);
+      setState(() => _updateState = null);
       QNotification.show(
         context,
         message: l10n.fwuAborted('$e'),
@@ -354,73 +189,39 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
     }
 
     if (waitForReconnect) {
-      await _completeRecoveryOnReconnect(target);
+      await _completeRecoveryOnReconnect();
     }
   }
 
-  Future<void> _completeRecoveryOnReconnect(String? target) async {
-    final returned = await FirmwareInstaller.awaitReconnect(widget.client);
-    // Asked again rather than trusting the answer alone: build() carries a
-    // post-frame _finishRecovery for a device that connects without this
-    // noticing, so if that has already run, accusing the hardware here would
-    // overwrite fwuRecovered with fwuRecoveryNoReconnect a frame later.
-    if (returned || widget.client.isConnected) {
-      _finishRecovery(target);
+  Future<void> _completeRecoveryOnReconnect() async {
+    if (widget.client.isConnected) {
+      _finishRecovery();
       return;
     }
-    // Cleared before the mounted check and under the key this flash published
-    // with, not the device in scope now: the state lives in the tracker, which
-    // outlives both this widget and the Flipper that went away, so clearing
-    // the wrong key - or not clearing at all because the page had been left -
-    // is the latch this branch exists to prevent.
-    _tracker.clear(target);
-    if (!mounted) return;
-    // The transitional state has to go whatever the answer was. It renders as
-    // a disabled RESTARTING button, so returning early and leaving it set - as
-    // this did until #118 - is a button the user cannot press again for the
-    // rest of the session, on the one path where trying again is the whole of
-    // what they can do. Clearing it drops back to the base state, which says
-    // what the device is actually doing and carries the message below in its
-    // description slot.
-    setState(() {
-      _outcome = null;
-      _inlineMessage = l10n.fwuRecoveryNoReconnect;
-    });
-    // The two other failures in this widget get a six-second red toast: an
-    // aborted install in _onPressed, an UpdateError in _onState. A device that
-    // was flashed and did not come back is the worst of the three, and it was
-    // the only one reported in 12px muted grey.
-    QNotification.show(
-      context,
-      message: l10n.fwuRecoveryNoReconnect,
-      type: QNotificationType.error,
-      duration: const Duration(seconds: 6),
-    );
+
+    try {
+      await widget.client.connectionStream
+          .firstWhere((_) => widget.client.isConnected)
+          .timeout(const Duration(seconds: 30));
+    } catch (_) {
+      return;
+    }
+    _finishRecovery();
   }
 
-  void _finishRecovery([String? target]) {
-    _tracker.clear(target ?? _deviceId);
+  void _finishRecovery() {
     if (!mounted) return;
     setState(() {
-      _outcome = null;
+      _updateState = null;
       _inlineMessage = l10n.fwuRecovered;
     });
   }
 
-  void _onState(String? target, UpdateState state) {
-    // Recorded whether or not this button is still on screen: the page is torn
-    // down and rebuilt on every device switch, and a flash that kept reporting
-    // only while its button happened to exist is how the progress used to go
-    // missing.
-    if (_isOutcome(state)) {
-      _tracker.clear(target);
-    } else {
-      _tracker.publish(target, widget.entry.shortName, state);
-    }
+  void _onState(UpdateState state) {
     if (!mounted) return;
     setState(() {
+      _updateState = state;
       _inlineMessage = null;
-      _outcome = _isOutcome(state) ? state : null;
     });
     if (state is UpdateError) {
       QNotification.show(
@@ -439,15 +240,6 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
     }
     return _baseState();
   }
-
-  /// Why there is no version to offer.
-  ///
-  /// A fetch that failed and a directory that simply carries nothing on this
-  /// channel are different facts, and only the first can honestly say the
-  /// server was not reached.
-  String get _noVersionReason => widget.fetchState.hasFailed
-      ? l10n.fwuDescCantCheck
-      : l10n.fwuDescNoServer;
 
   _ResolvedButtonState _baseState() {
     final description = _inlineMessage;
@@ -477,7 +269,7 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
         return _ResolvedButtonState(
           label: l10n.fwuLabelNoFirmware,
           color: _inactiveColor,
-          description: description ?? _noVersionReason,
+          description: l10n.fwuDescNoServer,
           enabled: false,
         );
       }
@@ -489,7 +281,7 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
       );
     }
 
-    if (widget.fetchState.isLoading || widget.deviceVersion == '-') {
+    if (widget.fetchLoading || widget.deviceVersion == '-') {
       return _ResolvedButtonState(
         label: l10n.fwuLabelChecking,
         color: _inactiveColor,
@@ -499,16 +291,10 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
     }
 
     if (widget.latestVersion == null) {
-      // "NO UPDATE" is a claim about what the server answered. When the fetch
-      // failed there was no answer, and saying it anyway tells someone with no
-      // network that their firmware is current - which is the one thing nobody
-      // here knows. #118.
       return _ResolvedButtonState(
-        label: widget.fetchState.hasFailed
-            ? l10n.fwuLabelCantCheck
-            : l10n.fwuLabelNoUpdate,
+        label: l10n.fwuLabelNoUpdate,
         color: _inactiveColor,
-        description: description ?? _noVersionReason,
+        description: l10n.fwuDescNoServer,
         enabled: false,
       );
     }
@@ -517,16 +303,7 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
       InstallAction.noUpdate => _ResolvedButtonState(
         label: l10n.fwuLabelNoUpdate,
         color: _inactiveColor,
-        // A refresh that failed leaves the previous directory standing, so
-        // the comparison behind "up to date" was made against whatever was
-        // last fetched - which may be arbitrarily old. The other branch of
-        // this reads fwuLabelCantCheck for the same reason; here there is a
-        // version to show, so only the explanation changes.
-        description:
-            description ??
-            (widget.fetchState.hasFailed
-                ? l10n.fwuDescCantCheck
-                : l10n.fwuDescUpToDate),
+        description: description ?? l10n.fwuDescUpToDate,
         enabled: false,
       ),
       InstallAction.update => _ResolvedButtonState(
@@ -582,12 +359,6 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
         description: l10n.fwuDescStartingUpdater,
         enabled: false,
       ),
-      UpdateInstalling() => _ResolvedButtonState(
-        label: l10n.fwuLabelRestarting,
-        color: _activeColor,
-        description: l10n.fwuDescWaitingReconnect,
-        enabled: false,
-      ),
       UpdateRecovering(:final step, :final progress) => _ResolvedButtonState(
         label: _recoveryLabel(step),
         color: _activeColor,
@@ -600,7 +371,12 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
         description: l10n.fwuDescWaitingReconnect,
         enabled: false,
       ),
-      UpdateDone() => _baseState(),
+      UpdateDone() => _ResolvedButtonState(
+        label: l10n.fwuLabelRunInstaller,
+        color: _activeColor,
+        description: l10n.fwuDescWillReboot,
+        enabled: false,
+      ),
       UpdateError() => _ResolvedButtonState(
         label: _installAction() == InstallAction.update
             ? l10n.fwuLabelUpdate
@@ -629,7 +405,6 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
         color: state.color,
       ),
       UpdateStarting() => _ProgressVisual(value: null, color: state.color),
-      UpdateInstalling() => _ProgressVisual(value: null, color: state.color),
       UpdateRecovering(:final step, :final progress) => _ProgressVisual(
         value: switch (step) {
           RecoveryStep.flashingRadio ||
@@ -642,6 +417,7 @@ class _FirmwareUpdateButtonState extends State<FirmwareUpdateButton> {
         value: null,
         color: state.color,
       ),
+      UpdateDone() => _ProgressVisual(value: 1, color: state.color),
       _ => null,
     };
   }

@@ -1,78 +1,12 @@
-import 'package:flipperlib/flipperlib.dart' hide DateTime, File;
 import 'package:flutter/material.dart';
 
-import '../pages/devices/controllers/device.dart';
-import '../pages/devices/device_scope.dart';
-import '../pages/option/diagnostics_scope.dart';
 import '../services/localization/controller.dart';
-import '../services/telemetry/settings.dart';
 import '../services/localization/l10n.dart';
 import '../theme/theme.dart';
 import 'shell.dart';
 
-class QUnleashedApp extends StatefulWidget {
-  const QUnleashedApp({
-    super.key,
-    required this.client,
-    required this.diagnostics,
-    this.navigatorObservers = const [],
-    this.device,
-  });
-
-  /// The one the composition root resolved. Everything below is given this
-  /// rather than reaching for the factory itself. ADR 0002.
-  final FlipperClient client;
-
-  /// The reporting switch `_initCore` built, on its way to the settings
-  /// screen through [DiagnosticsScope]. `Telemetry` holds the same object and
-  /// follows it; this is the half that draws it.
-  final DiagnosticsSettings diagnostics;
-
-  /// Watchers of every push and pop, which is how reporting learns which
-  /// screen a transaction belongs to.
-  ///
-  /// Empty by default and empty in a build with no DSN. A `NavigatorObserver`
-  /// rather than the SDK's own type, so this file takes a Flutter type and the
-  /// import rule in ADR 0013 §2 stays a rule about one folder.
-  ///
-  /// Read once, when `MaterialApp` is built. `MaterialApp` is rebuilt on every
-  /// theme and locale change, so this must be a value the composition root
-  /// made once rather than one built here - a fresh observer per accent colour
-  /// would start a new trace on each.
-  final List<NavigatorObserver> navigatorObservers;
-
-  /// The device controller the whole app reads, for a test that wants to
-  /// supply its own. Built here when nobody does.
-  final DeviceController? device;
-
-  @override
-  State<QUnleashedApp> createState() => _QUnleashedAppState();
-}
-
-class _QUnleashedAppState extends State<QUnleashedApp> {
-  /// Owned here rather than by [AppShell], and held in state rather than
-  /// built in [build] - ADR 0011.
-  ///
-  /// The `MaterialApp` below is rebuilt on every theme and locale change, so
-  /// a controller constructed in `build` would be replaced on each accent
-  /// colour, taking its subscriptions and its device with it.
-  late final DeviceController _device =
-      widget.device ?? DeviceController(client: widget.client);
-
-  @override
-  void dispose() {
-    // Only what this built. A controller handed in belongs to whoever handed
-    // it over, and tearing down someone else's fixture from here is how a
-    // test comes to fail in its teardown rather than its body.
-    if (widget.device == null) {
-      _device.dispose();
-      // Moved up with the controller. Only reached when the app itself goes,
-      // which on a phone is never - but it belongs wherever the controller
-      // is, and it was in `AppShell.dispose` for the same reason.
-      _device.client.disconnectAll();
-    }
-    super.dispose();
-  }
+class DoctorMobileApp extends StatelessWidget {
+  const DoctorMobileApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -86,24 +20,10 @@ class _QUnleashedAppState extends State<QUnleashedApp> {
           debugShowCheckedModeBanner: false,
           locale: locales.locale,
           localizationsDelegates: L10n.localizationsDelegates,
-          // Not `L10n.supportedLocales`: the framework resolves a device
-          // language against the head of this list, and gen-l10n sorts it.
-          // QLocaleController.resolutionOrder says what that cost.
-          supportedLocales: QLocaleController.resolutionOrder,
+          supportedLocales: L10n.supportedLocales,
           theme: buildAppTheme(controller.brightness, controller.accent),
           themeAnimationDuration: Duration.zero,
-          navigatorObservers: widget.navigatorObservers,
-          // `builder` wraps the Navigator, so a pushed route is inside this
-          // scope as well as the shell is. Mounting it in `AppShell` put it
-          // on route `/`, and a pushed route is that route's sibling.
-          builder: (context, child) => DeviceScope(
-            notifier: _device,
-            child: DiagnosticsScope(
-              notifier: widget.diagnostics,
-              child: child!,
-            ),
-          ),
-          home: AppShell(client: widget.client),
+          home: const AppShell(),
         );
       },
     );

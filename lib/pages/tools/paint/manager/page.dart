@@ -7,11 +7,10 @@ import 'package:flutter/material.dart';
 
 import '../../../../theme/theme.dart';
 import '../../../../components/filelist/sync_progress_bar.dart';
-import '../../../../components/navigation.dart';
 import '../../../../components/notification.dart';
 import '../../../../components/path.dart';
 
-import 'package:qunleashed/components/appbar.dart';
+import 'package:doctormobile/components/appbar.dart';
 
 import '../../../archive/editor/open.dart';
 import '../dolphin/importer.dart';
@@ -21,9 +20,6 @@ import '../project.dart';
 import '../project_preview.dart';
 import 'controller.dart';
 import 'details.dart';
-import '../../../devices/device_scope.dart';
-
-import 'package:flipperlib/flipperlib.dart';
 
 /// Pixel Draw's library screen: every local animation with its manifest
 /// settings. Rows open in the editor, the preview picks the animation the
@@ -31,11 +27,7 @@ import 'package:flipperlib/flipperlib.dart';
 /// goes to `/ext/dolphin` is assembled right here — including editing the
 /// manifest as text.
 class ProjectManagerPage extends StatefulWidget {
-  const ProjectManagerPage({super.key, required this.client});
-
-  /// The Flipper a pack is sent to and imported from. Required rather than
-  /// defaulted: the route builder has a DeviceScope above it. ADR 0002.
-  final FlipperClient client;
+  const ProjectManagerPage({super.key});
 
   @override
   State<ProjectManagerPage> createState() => _ProjectManagerPageState();
@@ -47,7 +39,7 @@ class _ProjectManagerPageState extends State<ProjectManagerPage> {
   @override
   void initState() {
     super.initState();
-    _ctrl = ProjectManagerController(client: widget.client);
+    _ctrl = ProjectManagerController();
     _ctrl.addListener(_onChange);
     _ctrl.loadAll();
   }
@@ -55,12 +47,9 @@ class _ProjectManagerPageState extends State<ProjectManagerPage> {
   void _onChange() {
     if (!mounted) return;
     setState(() {});
-    // Taken, not read: this fires on every notification the controller makes,
-    // including a slider tick, and a failure left in place re-appeared on
-    // each one. #114.
-    final failure = _ctrl.takeFailure();
-    if (failure != null) {
-      context.showNotification(failure, type: QNotificationType.error);
+    final err = _ctrl.error;
+    if (err != null) {
+      context.showNotification(err, type: QNotificationType.error);
     }
   }
 
@@ -80,10 +69,7 @@ class _ProjectManagerPageState extends State<ProjectManagerPage> {
       return;
     }
     final written = await _ctrl.importFromDevice();
-    // Null is an import that did not finish, and its own toast is already up.
-    // Zero used to cover both, so "Animations already match the device"
-    // replaced the failure the user had just been shown. #114.
-    if (!mounted || written == null) return;
+    if (!mounted || _ctrl.error != null) return;
     if (written == 0) {
       context.showNotification(
         context.l10n.paintImportUpToDate,
@@ -93,13 +79,8 @@ class _ProjectManagerPageState extends State<ProjectManagerPage> {
   }
 
   Future<void> _openEditor(PaintProject? project) async {
-    // Two editors on one project each run their own 1.2 s autosave timer
-    // against the same draft folder, which is the harm here. Two editors on
-    // *New* do not: each mints its own draft id, so that one costs two stray
-    // drafts rather than a clobber. The gallery card was already immune to
-    // both - it declares onDoubleTap, which absorbs the second click - and the
-    // sheet's Edit and the New button are the doors that were not. #244.
-    await pushPage(context, (_) => PaintPage(project: project));
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => PaintPage(project: project)));
     // Returning from the editor may have created or updated a draft.
     await _ctrl.loadAll(silent: true);
   }
@@ -199,21 +180,15 @@ class _ProjectManagerPageState extends State<ProjectManagerPage> {
         localPath: file.path,
         title: 'manifest.txt',
         onSave: (bytes) async {
-          final result = _ctrl.applyManifest(
+          final applied = _ctrl.applyManifest(
             utf8.decode(bytes, allowMalformed: true),
           );
           if (!mounted) return true;
-          // A paragraph that named no animation is dropped, so it is the more
-          // useful thing to say even when the rest of the text applied: the
-          // user wrote something the file does not do.
-          final nameless = result.nameless;
           context.showNotification(
-            nameless > 0
-                ? context.l10n.paintManifestNameless(nameless)
-                : result.applied == 0
+            applied == 0
                 ? context.l10n.paintManifestInvalid
                 : context.l10n.paintManifestApplied,
-            type: nameless > 0 || result.applied == 0
+            type: applied == 0
                 ? QNotificationType.warning
                 : QNotificationType.good,
           );
@@ -239,7 +214,6 @@ class _ProjectManagerPageState extends State<ProjectManagerPage> {
     return Scaffold(
       backgroundColor: colors.background,
       appBar: QPageAppBar(
-        client: DeviceScope.of(context).client,
         title: context.l10n.paintTitle,
         actions: [
           QPageAppBarAction(

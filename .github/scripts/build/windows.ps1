@@ -5,14 +5,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
-$AppName = "qunleashed"
-# The asset version, which carries the channel suffix and build number on a dev
-# build so its filenames differ from the release of the same cycle. Falls back
-# to the numeric name, then to pubspec.
-$VersionName = $env:QUNLEASHED_ASSET_VERSION
-if ([string]::IsNullOrWhiteSpace($VersionName)) {
-    $VersionName = $env:QUNLEASHED_VERSION_NAME
-}
+$AppName = "doctormobile"
+$VersionName = $env:DOCTORMOBILE_VERSION_NAME
 if ([string]::IsNullOrWhiteSpace($VersionName)) {
     $pubspecPath = Join-Path $RootDir "pubspec.yaml"
     $versionLine = Get-Content -Path $pubspecPath | Where-Object { $_ -match '^version:\s*([0-9A-Za-z._-]+)' } | Select-Object -First 1
@@ -21,7 +15,7 @@ if ([string]::IsNullOrWhiteSpace($VersionName)) {
     }
 }
 if ([string]::IsNullOrWhiteSpace($VersionName)) {
-    throw "App version not found. Set QUNLEASHED_ASSET_VERSION or pubspec.yaml version."
+    throw "App version not found. Set DOCTORMOBILE_VERSION_NAME or pubspec.yaml version."
 }
 $DistDir = Join-Path $RootDir "dist"
 $OutFile = Join-Path $DistDir "$AppName`_$VersionName`_windows_x64.exe"
@@ -45,8 +39,8 @@ Write-Host "Using Flutter: $FlutterBin"
 Write-Host "Building Windows release..."
 
 $buildArgs = @("build", "windows", "--release")
-if (-not [string]::IsNullOrWhiteSpace($env:QUNLEASHED_FLUTTER_BUILD_ARGS)) {
-    $buildArgs += $env:QUNLEASHED_FLUTTER_BUILD_ARGS -split "\s+"
+if (-not [string]::IsNullOrWhiteSpace($env:DOCTORMOBILE_FLUTTER_BUILD_ARGS)) {
+    $buildArgs += $env:DOCTORMOBILE_FLUTTER_BUILD_ARGS -split "\s+"
 }
 
 Push-Location $RootDir
@@ -91,8 +85,10 @@ if ([string]::IsNullOrWhiteSpace($BuildDir)) {
 # damage there is the lost `/O2 /Ob2 /DNDEBUG /MD`, which no debug-file check
 # can see; only `enable_language(C)` prevents it.
 $ExpectedPdbs = @("$AppName.pdb")
+# The native libraries keep the qunleashed_ names the app loads. The runner
+# binary is doctormobile.exe; these DLLs are not.
 foreach ($lib in @("mfkey32", "hardnested", "faaccrack")) {
-    $ExpectedPdbs += "${AppName}_$lib.pdb"
+    $ExpectedPdbs += "qunleashed_$lib.pdb"
 }
 # The DLLs first, by a separate check, because they reach this directory by a
 # different route than their PDBs: the DLLs via the POST_BUILD
@@ -103,7 +99,7 @@ foreach ($lib in @("mfkey32", "hardnested", "faaccrack")) {
 # load it. That is #338 on the other platform, and nothing else would catch it.
 $ExpectedDlls = @()
 foreach ($lib in @("mfkey32", "hardnested", "faaccrack")) {
-    $ExpectedDlls += "${AppName}_$lib.dll"
+    $ExpectedDlls += "qunleashed_$lib.dll"
 }
 $MissingDlls = $ExpectedDlls | Where-Object { -not (Test-Path (Join-Path $BuildDir $_)) }
 if ($MissingDlls) {
@@ -162,7 +158,7 @@ $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) "$AppName-build-$PID"
 $PayloadZip = Join-Path $TempDir "payload.zip"
 $StubSource = Join-Path $TempDir "SelfExtractingLauncher.cs"
 $StubExe = Join-Path $TempDir "stub.exe"
-$Marker = [System.Text.Encoding]::ASCII.GetBytes("`r`n__QUNLEASHED_PAYLOAD_BELOW__`r`n")
+$Marker = [System.Text.Encoding]::ASCII.GetBytes("`r`n__DOCTORMOBILE_PAYLOAD_BELOW__`r`n")
 
 if (Test-Path $TempDir) {
     Remove-Item -Recurse -Force $TempDir
@@ -184,9 +180,9 @@ using System.Text;
 
 internal static class SelfExtractingLauncher
 {
-    private const string AppExe = "qunleashed.exe";
-    private const string SentinelFile = ".qunleashed_payload_extracted";
-    private static readonly byte[] Marker = Encoding.ASCII.GetBytes("\r\n__QUNLEASHED_PAYLOAD_BELOW__\r\n");
+    private const string AppExe = "doctormobile.exe";
+    private const string SentinelFile = ".doctormobile_payload_extracted";
+    private static readonly byte[] Marker = Encoding.ASCII.GetBytes("\r\n__DOCTORMOBILE_PAYLOAD_BELOW__\r\n");
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int MessageBox(IntPtr hWnd, string text, string caption, uint type);
@@ -197,7 +193,7 @@ internal static class SelfExtractingLauncher
         try
         {
             string selfPath = Assembly.GetExecutingAssembly().Location;
-            string workDir = Path.Combine(Path.GetTempPath(), "qunleashed-self-" + GetFileHashPrefix(selfPath));
+            string workDir = Path.Combine(Path.GetTempPath(), "doctormobile-self-" + GetFileHashPrefix(selfPath));
             string appPath = Path.Combine(workDir, AppExe);
             string sentinelPath = Path.Combine(workDir, SentinelFile);
 
@@ -226,7 +222,7 @@ internal static class SelfExtractingLauncher
         }
         catch (Exception ex)
         {
-            MessageBox(IntPtr.Zero, ex.ToString(), "qUnleashed launch failed", 0x00000010);
+            MessageBox(IntPtr.Zero, ex.ToString(), "DoctorMobile launch failed", 0x00000010);
             Console.Error.WriteLine(ex.ToString());
             return 1;
         }

@@ -82,6 +82,7 @@ class FlipperMockupHero extends StatelessWidget {
     required this.connectionLabel,
     required this.connectionIcon,
     this.dfu = false,
+    this.stats,
   });
 
   final bool active;
@@ -91,6 +92,7 @@ class FlipperMockupHero extends StatelessWidget {
   final Map<String, String> deviceInfo;
   final String connectionLabel;
   final IconData connectionIcon;
+  final Widget? stats;
 
   @override
   Widget build(BuildContext context) {
@@ -145,6 +147,7 @@ class FlipperMockupHero extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   _HeroPill(icon: connectionIcon, label: connectionLabel),
+                  if (stats != null) ...[const SizedBox(width: 12), stats!],
                 ],
               ),
               const SizedBox(height: 10),

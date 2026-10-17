@@ -1,5 +1,5 @@
-name: qunleashed
-description: "Flipper Zero BLE/USB companion app."
+name: doctormobile
+description: "DoctorMobile — Flipper Zero BLE/USB companion app."
 homepage: https://aperturefox.ru
 publish_to: 'none'
 # The version being built *toward*, not the last one released: ADR 0014 §2.
@@ -8,10 +8,10 @@ publish_to: 'none'
 # picks a digit, it only refuses a tag that disagrees with this and a version
 # that has already been published.
 #
-# No build number. §6 derives it from the commit count, so one here would be a
-# number that means nothing; the build scripts that fall back to reading
-# this line stop at the `+` and are unaffected either way.
-version: 0.17.0
+# The number after + is what the release job derives from 0.17.0. It is
+# already written here so that job finds pubspec current and does not push
+# a second commit after publishing.
+version: 0.17.0+17000
 
 environment:
   # What this actually builds on, rather than a wider window.
@@ -37,7 +37,10 @@ dependencies:
     path: lib/modules/extensions/super_drag_and_drop
   super_clipboard:
     path: lib/modules/extensions/super_clipboard
-  universal_ble: ^2.3.0
+  applemap:
+    path: lib/modules/applemap
+  universal_ble:
+    path: lib/modules/universal_ble
   usb_serial: ^0.5.2
   permission_handler: ^11.3.1
   flutter_libserialport: ^0.6.0
@@ -120,6 +123,8 @@ dependency_overrides:
     path: lib/modules/irondash/engine_context/dart
   irondash_message_channel:
     path: lib/modules/irondash/message_channel/dart
+  universal_ble:
+    path: lib/modules/universal_ble
 
 # How `sentry_dart_plugin` uploads. The org and project are not secrets; the
 # token is, and is read from the environment (`SENTRY_AUTH_TOKEN`) rather than
