@@ -158,9 +158,13 @@ flutter:
   uses-material-design: true
   generate: true
   fonts:
-    - family: Born2bSportyV3
+    - family: FlipperBold
       fonts:
-        - asset: assets/font/born2b-sporty-v3.ttf
+        - asset: assets/font/flipper-bold.ttf
+          weight: 500
+    - family: Born2bSportyV2
+      fonts:
+        - asset: assets/font/born2b-sporty-v2.ttf
     - family: GravityBold8
       fonts:
         - asset: assets/font/gravity-bold-8.ttf
