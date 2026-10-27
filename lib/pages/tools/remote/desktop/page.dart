@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flipperlib/flipperlib.dart' show FlipperClient, InputFocusKind;
 import 'package:flutter/material.dart';
@@ -24,6 +25,10 @@ import 'widgets/actions.dart';
 import 'widgets/controls.dart';
 import 'widgets/screen.dart';
 import 'widgets/wide_body.dart';
+
+const Duration _kScreenKeyboardSettle = Duration(milliseconds: 400);
+
+const Duration _kScreenGuessGrace = Duration(milliseconds: 1500);
 
 class RemoteControlPage extends StatefulWidget {
   const RemoteControlPage({
@@ -58,6 +63,9 @@ class _RemoteControlPageState extends State<RemoteControlPage>
 
   Timer? _recordingTick;
   Timer? _keyboardResync;
+  Timer? _screenGuessArm;
+  bool _screenGuessArmed = false;
+  Uint8List? _lastPixels;
   OnScreenKeyboard? _screenKeyboard;
   OnScreenKeyboard? _pendingScreen;
   int _keyBurst = 0;
@@ -75,6 +83,7 @@ class _RemoteControlPageState extends State<RemoteControlPage>
       supportedOverride: widget.mediaRemoteSupported,
     );
     unawaited(_startMediaRemote());
+    _screenGuessArm = Timer(_kScreenGuessGrace, _armScreenGuess);
   }
 
   Future<void> _startMediaRemote() async {
@@ -102,6 +111,7 @@ class _RemoteControlPageState extends State<RemoteControlPage>
     WidgetsBinding.instance.removeObserver(this);
     _recordingTick?.cancel();
     _keyboardResync?.cancel();
+    _screenGuessArm?.cancel();
     unawaited(_stopMediaRemote());
     _session
       ..removeListener(_onSessionChanged)
@@ -192,8 +202,25 @@ class _RemoteControlPageState extends State<RemoteControlPage>
         _stopGifRecording();
       }
     }
+    _lastPixels = frame.pixelIndices;
+    _guessScreen();
+  }
+
+  void _armScreenGuess() {
+    _screenGuessArmed = true;
+    _guessScreen();
+  }
+
+  void _guessScreen() {
+    final pixels = _lastPixels;
+    if (pixels == null || !mounted) return;
     if (_session.doctorKeyboard) return;
-    _noteScreen(detectOnScreenKeyboard(frame.pixelIndices));
+    if (!_screenGuessArmed) return;
+    if (_session.lockStatusKnown && _session.isLocked) {
+      _noteScreen(null);
+      return;
+    }
+    _noteScreen(detectOnScreenKeyboard(pixels));
   }
 
   RemoteTextKind? get _phoneKind {
@@ -222,13 +249,28 @@ class _RemoteControlPageState extends State<RemoteControlPage>
       _pendingScreen = found;
       return;
     }
-    final kindChanged = found?.kind != _screenKeyboard?.kind;
-    if (_screenKeyboard == null || kindChanged) {
+    if (found == null) {
       _keyboardResync?.cancel();
       _keyboardResync = null;
+      _pendingScreen = null;
+      if (_screenKeyboard != null) {
+        _screenKeyboard = null;
+        if (mounted) setState(() {});
+      }
+      return;
+    }
+    if (_screenKeyboard == null || found.kind != _screenKeyboard!.kind) {
+      final waiting =
+          _keyboardResync != null && _pendingScreen?.kind == found.kind;
       _pendingScreen = found;
-      _screenKeyboard = found;
-      if (kindChanged && mounted) setState(() {});
+      if (waiting) return;
+      _keyboardResync?.cancel();
+      _keyboardResync = Timer(_kScreenKeyboardSettle, () {
+        _keyboardResync = null;
+        if (!mounted || _keyBurst > 0) return;
+        _screenKeyboard = _pendingScreen;
+        setState(() {});
+      });
       return;
     }
     if (_sameKeyboard(found, _screenKeyboard)) {
@@ -322,6 +364,7 @@ class _RemoteControlPageState extends State<RemoteControlPage>
     return PhoneKeyboardField(
       key: ValueKey(kind),
       kind: kind,
+      autofocus: _session.doctorKeyboard,
       onInsert: (text) => unawaited(_insertText(text)),
       onBackspace: (count) => unawaited(_backspaceText(count)),
       onSubmit: () => unawaited(_submitText()),
@@ -608,7 +651,22 @@ class _RemoteControlPageState extends State<RemoteControlPage>
     );
   }
 
-  Widget _narrowBody(RemoteLayout layout) {
+  Widget _narrowBody(RemoteLayout layout, {required bool typing}) {
+    if (typing) {
+      return Column(
+        children: [
+          _actions(layout),
+          const SizedBox(height: RemoteLayout.actionsSpacing),
+          Expanded(
+            child: Center(
+              child: FittedBox(fit: BoxFit.scaleDown, child: _screen(layout)),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _phoneField(),
+        ],
+      );
+    }
     return Column(
       children: [
         _actions(layout),
@@ -625,6 +683,8 @@ class _RemoteControlPageState extends State<RemoteControlPage>
   Widget build(BuildContext context) {
     final colors = context.appColors;
     final wide = RemoteLayout.isWide(MediaQuery.sizeOf(context));
+    final typing =
+        _phoneKind != null && MediaQuery.viewInsetsOf(context).bottom > 0;
 
     return PopScope(
       canPop: false,
@@ -664,7 +724,7 @@ class _RemoteControlPageState extends State<RemoteControlPage>
                     ? _wideBody(layout)
                     : Padding(
                         padding: layout.padding,
-                        child: _narrowBody(layout),
+                        child: _narrowBody(layout, typing: typing),
                       );
               },
             ),

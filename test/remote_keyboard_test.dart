@@ -14,8 +14,23 @@ void _paint(Uint8List pixels, int x, int y, int w, int h) {
   }
 }
 
-void _speck(Uint8List pixels, int x, int y) {
-  _paint(pixels, x, y, 2, 2);
+Uint8List _keyboard(
+  RemoteKeyboardFamily family, {
+  int selected = 0,
+  Set<int> bare = const {},
+}) {
+  final pixels = _blank();
+  final boxes = keyboardKeyBoxes(family);
+  for (var i = 0; i < boxes.length; i++) {
+    if (bare.contains(i)) continue;
+    final (x, y, w, h) = boxes[i];
+    if (i == selected) {
+      _paint(pixels, x, y, w, h);
+    } else {
+      _paint(pixels, x + 1, y + 1, w ~/ 2, (h * 2) ~/ 5);
+    }
+  }
+  return pixels;
 }
 
 void main() {
@@ -24,9 +39,29 @@ void main() {
   });
 
   test('stock text keyboard reports the filled key', () {
+    final board = detectOnScreenKeyboard(
+      _keyboard(RemoteKeyboardFamily.stockText),
+    );
+    expect(board, isNotNull);
+    expect(board!.family, RemoteKeyboardFamily.stockText);
+    expect(board.row, 0);
+    expect(board.column, 0);
+    expect(board.uppercaseByDefault, isTrue);
+  });
+
+  test('the selected key is the one reported, not the first', () {
+    final board = detectOnScreenKeyboard(
+      _keyboard(RemoteKeyboardFamily.stockText, selected: 3),
+    );
+    expect(board, isNotNull);
+    expect(board!.row, 0);
+    expect(board.column, 3);
+  });
+
+  test('one solid box and a little ink is not a keyboard', () {
     final pixels = _blank();
     _paint(pixels, 1, 29, 7, 10);
-    for (final origin in const [
+    for (final (x, y) in const [
       (10, 29),
       (19, 29),
       (28, 29),
@@ -36,15 +71,25 @@ void main() {
       (10, 53),
       (91, 29),
     ]) {
-      _speck(pixels, origin.$1, origin.$2);
+      _paint(pixels, x, y, 2, 2);
     }
+    expect(detectOnScreenKeyboard(pixels), isNull);
+  });
 
-    final board = detectOnScreenKeyboard(pixels);
-    expect(board, isNotNull);
-    expect(board!.family, RemoteKeyboardFamily.stockText);
-    expect(board.row, 0);
-    expect(board.column, 0);
-    expect(board.uppercaseByDefault, isTrue);
+  test('a keyboard with two solid keys is not a keyboard', () {
+    final pixels = _keyboard(RemoteKeyboardFamily.stockText);
+    final (x, y, w, h) = keyboardKeyBoxes(RemoteKeyboardFamily.stockText)[5];
+    _paint(pixels, x, y, w, h);
+    expect(detectOnScreenKeyboard(pixels), isNull);
+  });
+
+  test('a large dark picture is not a keyboard', () {
+    final pixels = _blank();
+    _paint(pixels, 40, 20, 48, 30);
+    for (var x = 0; x < kRemoteScreenWidth; x += 3) {
+      _paint(pixels, x, 56, 1, 6);
+    }
+    expect(detectOnScreenKeyboard(pixels), isNull);
   });
 
   test('stock path from q to w is one step right', () {
@@ -110,25 +155,19 @@ void main() {
   });
 
   test('number keys are not reported as hex', () {
-    final pixels = _blank();
-    _paint(pixels, 4, 33, 11, 13);
-    for (final origin in const [
-      (15, 33),
-      (26, 33),
-      (37, 33),
-      (48, 33),
-      (4, 47),
-      (15, 47),
-      (26, 47),
-    ]) {
-      _paint(pixels, origin.$1, origin.$2, 4, 2);
-    }
-
-    final board = detectOnScreenKeyboard(pixels);
+    final board = detectOnScreenKeyboard(
+      _keyboard(RemoteKeyboardFamily.number, bare: {11}),
+    );
     expect(board, isNotNull);
     expect(board!.family, RemoteKeyboardFamily.number);
     expect(board.row, 0);
     expect(board.column, 0);
+  });
+
+  test('hex keyboard is reported as byte input', () {
+    final board = detectOnScreenKeyboard(_keyboard(RemoteKeyboardFamily.byte));
+    expect(board, isNotNull);
+    expect(board!.family, RemoteKeyboardFamily.byte);
   });
 
   test('number backspace uses the on-screen key', () {

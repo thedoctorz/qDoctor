@@ -34,6 +34,7 @@ typedef struct {
     VkCommandBuffer cmd;
     VkFence fence;
     VkPhysicalDeviceMemoryProperties mem_props;
+    int lost;
 } DvkContext;
 
 typedef struct {
@@ -78,8 +79,6 @@ void dvk_pipeline_destroy(DvkContext* c, DvkPipeline* p);
 void dvk_pipeline_bind_buffer(
     DvkContext* c, DvkPipeline* p, uint32_t binding, const DvkBuffer* b);
 
-/* Record + submit one dispatch of (gx,gy,gz) workgroups with push constants,
- * barrier the writes for host reads, and wait for completion. 0 on success. */
 int dvk_dispatch(
     DvkContext* c,
     DvkPipeline* p,
@@ -87,7 +86,8 @@ int dvk_dispatch(
     uint32_t push_const_bytes,
     uint32_t gx,
     uint32_t gy,
-    uint32_t gz);
+    uint32_t gz,
+    volatile int* cancel);
 
 #ifdef __cplusplus
 }

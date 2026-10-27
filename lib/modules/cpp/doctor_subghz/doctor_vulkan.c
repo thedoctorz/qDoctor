@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -365,7 +366,9 @@ fail_device:
 
 void dvk_shutdown(DvkContext* c) {
     if(c->device) {
-        vkDeviceWaitIdle(c->device);
+        if(!c->lost) {
+            vkDeviceWaitIdle(c->device);
+        }
         if(c->fence) {
             vkDestroyFence(c->device, c->fence, NULL);
         }
@@ -585,6 +588,15 @@ void dvk_pipeline_bind_buffer(
     w.pBufferInfo = &dbi;
     vkUpdateDescriptorSets(c->device, 1, &w, 0, NULL);
 }
+static uint64_t dvk_now_ms(void) {
+#if defined(_WIN32)
+    return (uint64_t)GetTickCount64();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)(ts.tv_nsec / 1000000ll);
+#endif
+}
 
 int dvk_dispatch(
     DvkContext* c,
@@ -593,7 +605,11 @@ int dvk_dispatch(
     uint32_t push_const_bytes,
     uint32_t gx,
     uint32_t gy,
-    uint32_t gz) {
+    uint32_t gz,
+    volatile int* cancel) {
+    if(c->lost) {
+        return -1;
+    }
     DVK_CHECK(vkResetCommandBuffer(c->cmd, 0));
 
     VkCommandBufferBeginInfo bi = {0};
@@ -636,8 +652,30 @@ int dvk_dispatch(
 
     DVK_CHECK(vkResetFences(c->device, 1, &c->fence));
     DVK_CHECK(vkQueueSubmit(c->queue, 1, &si, c->fence));
-    DVK_CHECK(vkWaitForFences(c->device, 1, &c->fence, VK_TRUE, UINT64_MAX));
-    return 0;
+
+    const uint64_t poll_ns = 50ull * 1000ull * 1000ull;
+    const uint64_t ceiling_ms = 10000ull;
+    const uint64_t start_ms = dvk_now_ms();
+    for(;;) {
+        const VkResult wr = vkWaitForFences(c->device, 1, &c->fence, VK_TRUE, poll_ns);
+        if(wr == VK_SUCCESS) {
+            return 0;
+        }
+        if(wr != VK_TIMEOUT) {
+            c->lost = 1;
+            return -1;
+        }
+        const int cancelled = (cancel && *cancel);
+        const int expired = (dvk_now_ms() - start_ms) >= ceiling_ms;
+        if(cancelled || expired) {
+            const VkResult gr =
+                vkWaitForFences(c->device, 1, &c->fence, VK_TRUE, 250ull * 1000ull * 1000ull);
+            if(gr != VK_SUCCESS) {
+                c->lost = 1;
+            }
+            return -1;
+        }
+    }
 }
 
 #endif /* __ANDROID__ || _WIN32 */

@@ -82,7 +82,9 @@ static int psa_bf_dispatch_stage_vk(
             .stage = stage,
         };
         const uint32_t groups = (count + local - 1u) / local;
-        if(dvk_dispatch(c, p, &push, (uint32_t)sizeof(push), groups, 1u, 1u) != 0) {
+        if(dvk_dispatch(
+               c, p, &push, (uint32_t)sizeof(push), groups, 1u, 1u, opts ? opts->cancel : NULL) !=
+           0) {
             return -2;
         }
 

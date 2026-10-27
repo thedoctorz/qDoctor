@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
 import '../models/buttons.dart';
 
@@ -481,34 +481,43 @@ class _Hit {
   final int present;
 }
 
+const double _kMinPresentShare = 0.6;
+
 _Hit? _score(Uint8List pixels, _Layout layout) {
-  var bestFill = 0.0;
-  var bestPage = 0;
-  var bestRow = 0;
-  var bestColumn = 0;
-  var present = 0;
-  var sawSelection = false;
+  _Hit? best;
   for (var page = 0; page < layout.pages.length; page++) {
     final rows = layout.pages[page];
+    var cells = 0;
+    var present = 0;
+    var selections = 0;
+    var bestFill = 0.0;
+    var bestRow = 0;
+    var bestColumn = 0;
     for (var row = 0; row < rows.length; row++) {
       for (var column = 0; column < rows[row].length; column++) {
+        cells++;
         final cell = rows[row][column];
         final fill = _fill(pixels, cell.boxX, cell.boxY, cell.boxW, cell.boxH);
         final selected = cell.isLetter ? fill >= 0.75 : fill >= 0.55;
-        if (selected && fill >= bestFill) {
-          sawSelection = true;
-          bestFill = fill;
-          bestPage = page;
-          bestRow = row;
-          bestColumn = column;
+        if (selected) {
+          selections++;
+          if (fill >= bestFill) {
+            bestFill = fill;
+            bestRow = row;
+            bestColumn = column;
+          }
         } else if (fill >= 0.04 && fill < 0.65) {
           present++;
         }
       }
     }
+    if (selections != 1) continue;
+    if (present < ((cells - 1) * _kMinPresentShare).ceil()) continue;
+    if (best == null || present > best.present) {
+      best = _Hit(layout, page, bestRow, bestColumn, bestFill, present);
+    }
   }
-  if (!sawSelection || present < 6) return null;
-  return _Hit(layout, bestPage, bestRow, bestColumn, bestFill, present);
+  return best;
 }
 
 bool _byteOnlyInk(Uint8List pixels) {
@@ -561,6 +570,17 @@ OnScreenKeyboard? detectOnScreenKeyboard(Uint8List pixels) {
     page: best.page,
     uppercaseByDefault: text && _textFieldWantsUppercase(pixels),
   );
+}
+
+@visibleForTesting
+List<(int, int, int, int)> keyboardKeyBoxes(
+  RemoteKeyboardFamily family, {
+  int page = 0,
+}) {
+  return [
+    for (final row in _page(_layoutFor(family), page))
+      for (final cell in row) (cell.boxX, cell.boxY, cell.boxW, cell.boxH),
+  ];
 }
 
 _Layout _layoutFor(RemoteKeyboardFamily family) {

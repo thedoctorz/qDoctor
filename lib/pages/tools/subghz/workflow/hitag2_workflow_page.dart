@@ -293,6 +293,7 @@ class _Hitag2WorkflowPageState extends State<Hitag2WorkflowPage> {
                 'in ${c.elapsedLabel}',
                 if (c.recoveredAtPercentLabel != null)
                   'at ${c.recoveredAtPercentLabel}% of the search',
+                if (c.diagLabel != null) c.diagLabel!,
               ].join('  ·  '),
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: colors.textMuted),

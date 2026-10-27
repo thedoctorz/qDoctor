@@ -39,12 +39,18 @@ class _KeyFile {
 }
 
 class Hitag2WorkflowController extends ChangeNotifier {
-  Hitag2WorkflowController({FlipperClient? client, DoctorHitag2Engine? engine})
-    : _client = client ?? FlipperOneClient().get(),
-      _engine = engine ?? DoctorHitag2Engine();
+  Hitag2WorkflowController({
+    FlipperClient? client,
+    DoctorHitag2Engine? engine,
+    Duration? stallTimeout,
+  }) : _client = client ?? FlipperOneClient().get(),
+       _engine = engine ?? DoctorHitag2Engine(),
+       _stallTimeout = stallTimeout ?? const Duration(seconds: 120);
 
   final FlipperClient _client;
   final DoctorHitag2Engine _engine;
+
+  final Duration _stallTimeout;
 
   static const int _maxKeyFileBytes = 16 * 1024;
 
@@ -113,8 +119,13 @@ class Hitag2WorkflowController extends ChangeNotifier {
   Hitag2RecoverHandle? _handle;
   StreamSubscription<Hitag2Progress>? _progressSub;
   Timer? _ticker;
+  Timer? _watchdog;
   DateTime? _startedAt;
+  DateTime? _lastAdvanceAt;
+  int _lastPercent = -1;
   bool _disposed = false;
+  String? _diagLabel;
+  String? get diagLabel => _diagLabel;
 
   bool get isCalculating => _state == Hitag2WorkflowState.calculating;
   bool get hasResult =>
@@ -560,9 +571,17 @@ class Hitag2WorkflowController extends ChangeNotifier {
     notifyListeners();
     final handle = _engine.start(request: req);
     _handle = handle;
+    _lastAdvanceAt = DateTime.now();
+    _lastPercent = -1;
+    _startWatchdog();
     _progressSub = handle.progress.listen((p) {
       if (_disposed) return;
-      _progress = p.percent.clamp(0, 100) / 100.0;
+      final pct = p.percent.clamp(0, 100);
+      if (pct != _lastPercent) {
+        _lastPercent = pct;
+        _lastAdvanceAt = DateTime.now();
+      }
+      _progress = pct / 100.0;
       notifyListeners();
     });
     unawaited(
@@ -571,18 +590,21 @@ class Hitag2WorkflowController extends ChangeNotifier {
           if (_disposed) return;
           if (_state != Hitag2WorkflowState.calculating) return;
           _result = res;
+          _diagLabel = Hitag2Diag.describe(res.diag);
           if (res.found) {
             _method = 'Hitag2Hell';
             _recoveredAtProgress = _progress;
           }
           _syncElapsed();
           _stopTicker();
+          _stopWatchdog();
           _state = Hitag2WorkflowState.finished;
           notifyListeners();
         },
         onError: (Object e, StackTrace _) {
           if (_disposed) return;
           _stopTicker();
+          _stopWatchdog();
           _errorMessage = e.toString();
           _state = Hitag2WorkflowState.finished;
           notifyListeners();
@@ -591,9 +613,36 @@ class Hitag2WorkflowController extends ChangeNotifier {
     );
   }
 
+  void _startWatchdog() {
+    _watchdog?.cancel();
+    final period = Duration(
+      milliseconds: (_stallTimeout.inMilliseconds ~/ 4).clamp(250, 10000),
+    );
+    _watchdog = Timer.periodic(period, (_) {
+      if (_disposed || _state != Hitag2WorkflowState.calculating) return;
+      final last = _lastAdvanceAt;
+      if (last == null) return;
+      if (DateTime.now().difference(last) < _stallTimeout) return;
+      _handle?.cancel();
+      _stopTicker();
+      _stopWatchdog();
+      _errorMessage =
+          'Recovery stalled with no progress. Your device may not support '
+          'the GPU path — please report this with your phone model.';
+      _state = Hitag2WorkflowState.finished;
+      notifyListeners();
+    });
+  }
+
+  void _stopWatchdog() {
+    _watchdog?.cancel();
+    _watchdog = null;
+  }
+
   void cancel() {
     _handle?.cancel();
     _stopTicker();
+    _stopWatchdog();
     if (_state == Hitag2WorkflowState.calculating) {
       _state = Hitag2WorkflowState.finished;
       notifyListeners();
@@ -604,6 +653,7 @@ class Hitag2WorkflowController extends ChangeNotifier {
     _handle?.cancel();
     _handle = null;
     _stopTicker();
+    _stopWatchdog();
     _resetRun();
     _state = Hitag2WorkflowState.input;
     notifyListeners();
@@ -669,6 +719,7 @@ class Hitag2WorkflowController extends ChangeNotifier {
 
   void _resetRun() {
     _result = null;
+    _diagLabel = null;
     _errorMessage = null;
     _writeBackDone = false;
     _writtenPaths.clear();
@@ -723,6 +774,7 @@ class Hitag2WorkflowController extends ChangeNotifier {
     _handle?.cancel();
     _progressSub?.cancel();
     _stopTicker();
+    _stopWatchdog();
     super.dispose();
   }
 }

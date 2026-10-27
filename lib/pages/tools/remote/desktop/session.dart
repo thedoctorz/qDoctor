@@ -86,6 +86,7 @@ class RemoteSession extends ChangeNotifier {
   bool get justUnlocked => _justUnlocked;
 
   bool get isLocked => _isLocked;
+  bool get lockStatusKnown => _lockStatusKnown;
   bool get isDisconnected => _isDisconnected;
   bool get inputAvailable => _inputAvailable;
 

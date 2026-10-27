@@ -12,6 +12,12 @@ extern "C" {
 #define HITAG2HELL_I1_SPAN         1024U
 #define HITAG2HELL_MAX_STATES      131072U
 
+#define HITAG2HELL_DIAG_GPU_INIT_OK  0x01 /* Vulkan/Metal path was entered. */
+#define HITAG2HELL_DIAG_GPU_FAULT    0x02 /* a GPU dispatch timed out / faulted. */
+#define HITAG2HELL_DIAG_CPU_FALLBACK 0x04 /* ran the CPU oracle (no usable GPU). */
+#define HITAG2HELL_DIAG_FOUND        0x08 /* a key was recovered. */
+#define HITAG2HELL_DIAG_CANCELLED    0x10 /* the user cancelled. */
+
 typedef struct {
     uint32_t hop;
     uint32_t uid;
@@ -102,6 +108,9 @@ typedef struct {
     /* CPU worker threads assisting the GPU (bidirectional meet-in-the-middle).
      * 0 = auto (a small pool); negative is treated as auto. */
     int cpu_threads;
+    /* Optional: OR-ed with HITAG2HELL_DIAG_GPU_* to report what the GPU path
+     * did. May be NULL. */
+    int* diag;
 } Hitag2HellVulkanOptions;
 
 /* Vulkan GPU search (Android + Windows). Same contract as

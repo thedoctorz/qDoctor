@@ -3,6 +3,9 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _OPENMP
+#include <stdatomic.h>
+#endif
 
 static uint32_t hitag2hell_i4(uint64_t x, int a, int b, int c, int d) {
     return (uint32_t)((((x >> a) & 1U) << 3U) | (((x >> b) & 1U) << 2U) |
@@ -236,13 +239,14 @@ int hitag2hell_recover_cpu_ex(
     uint32_t found = 0;
     int cancelled = 0;
 #ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(dynamic, 4)
+    _Atomic uint32_t done_c = 0;
+#pragma omp parallel for schedule(dynamic, 4)
     for(uint32_t c = 0; c < ncand; c++) {
+        if(cancel && *cancel) {
+            cancelled = 1;
+            continue;
+        }
         for(uint32_t i1 = 0; i1 < HITAG2HELL_I1_SPAN; i1++) {
-            if(cancel && *cancel) {
-                cancelled = 1;
-                continue;
-            }
             uint64_t tmp[32];
             uint32_t n = 0;
             hitag2hell_find_state_cpu(keystream, packed, tmp, &n, c, 0, i1, 32);
@@ -256,6 +260,16 @@ int hitag2hell_recover_cpu_ex(
             const uint32_t take =
                 (slot + n > HITAG2HELL_MAX_STATES) ? (HITAG2HELL_MAX_STATES - slot) : n;
             memcpy(&matches[slot], tmp, take * sizeof(uint64_t));
+        }
+        if(progress_out) {
+            const uint32_t d = atomic_fetch_add_explicit(&done_c, 1, memory_order_relaxed) + 1u;
+            if((d & 31u) == 0u || d == ncand) {
+                uint32_t pct = ncand ? (uint32_t)(((uint64_t)d * 100u) / ncand) : 0u;
+                if(pct > 100u) {
+                    pct = 100u;
+                }
+                *progress_out = ((uint64_t)pct << 56) | ((uint64_t)d & 0x00FFFFFFFFFFFFFFULL);
+            }
         }
     }
     if(found > HITAG2HELL_MAX_STATES) {

@@ -85,6 +85,7 @@ typedef struct {
     _Atomic int found;
     _Atomic uint32_t states_tested;
     _Atomic uint32_t keys_tried;
+    _Atomic int active_workers;
 
     pthread_mutex_t grab_lock;
     pthread_mutex_t result_lock;
@@ -170,7 +171,16 @@ static void* hitag2hell_cpu_worker(void* arg) {
         atomic_fetch_add_explicit(&sh->states_tested, local_states, memory_order_relaxed);
         atomic_fetch_add_explicit(&sh->keys_tried, local_keys, memory_order_relaxed);
     }
+    atomic_fetch_sub_explicit(&sh->active_workers, 1, memory_order_release);
     return NULL;
+}
+
+static void hitag2hell_sleep_ms(unsigned ms) {
+#if defined(_WIN32)
+    Sleep(ms);
+#else
+    usleep((useconds_t)ms * 1000u);
+#endif
 }
 
 int hitag2hell_vulkan_available(void) {
@@ -182,6 +192,7 @@ int hitag2hell_recover_vulkan(
     Hitag2HellResult* out,
     const Hitag2HellVulkanOptions* opts) {
     memset(out, 0, sizeof(*out));
+    int* diag = opts ? opts->diag : NULL;
 
     /* Bring up Vulkan first: if there is no usable GPU we return -1 immediately
      * (the bridge falls back to CPU) without wasting the layer-0 scan. */
@@ -252,6 +263,9 @@ int hitag2hell_recover_vulkan(
         free(candidates46);
         return -1; /* fall back to CPU */
     }
+    if(diag) {
+        *diag |= HITAG2HELL_DIAG_GPU_INIT_OK;
+    }
 
     memcpy(ks_buf.mapped, keystream, sizeof(keystream));
     memcpy(cand_buf.mapped, cand2, sizeof(uint32_t) * 2U * ncand);
@@ -277,6 +291,7 @@ int hitag2hell_recover_vulkan(
     atomic_init(&sh.found, 0);
     atomic_init(&sh.states_tested, 0);
     atomic_init(&sh.keys_tried, 0);
+    atomic_init(&sh.active_workers, 0);
     pthread_mutex_init(&sh.grab_lock, NULL);
     pthread_mutex_init(&sh.result_lock, NULL);
     sh.out = out;
@@ -306,9 +321,11 @@ int hitag2hell_recover_vulkan(
     int spawned = 0;
     if(workers) {
         for(int i = 0; i < nworkers; i++) {
+            atomic_fetch_add_explicit(&sh.active_workers, 1, memory_order_relaxed);
             if(pthread_create(&workers[i], NULL, hitag2hell_cpu_worker, &sh) == 0) {
                 spawned++;
             } else {
+                atomic_fetch_sub_explicit(&sh.active_workers, 1, memory_order_relaxed);
                 break;
             }
         }
@@ -338,8 +355,15 @@ int hitag2hell_recover_vulkan(
             .matches_cap = cap,
         };
         const uint32_t groups_x = (count + local - 1u) / local;
-        if(dvk_dispatch(&c, &pipe, &push, (uint32_t)sizeof(push), groups_x, HITAG2HELL_I1_SPAN, 1u) !=
-           0) {
+        if(dvk_dispatch(
+               &c,
+               &pipe,
+               &push,
+               (uint32_t)sizeof(push),
+               groups_x,
+               HITAG2HELL_I1_SPAN,
+               1u,
+               sh.external_cancel) != 0) {
             gpu_error = 1;
             break;
         }
@@ -389,6 +413,29 @@ int hitag2hell_recover_vulkan(
      * covers the remaining candidates (graceful degrade, not a hard failure). */
     if(gpu_error) {
         atomic_store_explicit(&sh.gpu_upto, 0, memory_order_release);
+        if(diag && !hitag2hell_cancelled(&sh)) {
+            *diag |= HITAG2HELL_DIAG_GPU_FAULT;
+        }
+    }
+
+    while(atomic_load_explicit(&sh.active_workers, memory_order_acquire) > 0) {
+        if(opts && opts->progress) {
+            const uint32_t g = atomic_load_explicit(&sh.gpu_upto, memory_order_relaxed);
+            const uint32_t cursor = atomic_load_explicit(&sh.cpu_cursor, memory_order_relaxed);
+            const uint32_t cpu_done = (ncand >= cursor) ? (ncand - cursor) : 0u;
+            uint32_t done = g + cpu_done;
+            if(done > ncand) {
+                done = ncand;
+            }
+            opts->progress(done, ncand, opts->ctx);
+        }
+        if(atomic_load_explicit(&sh.found, memory_order_acquire)) {
+            break;
+        }
+        if(hitag2hell_cancelled(&sh)) {
+            break;
+        }
+        hitag2hell_sleep_ms(100);
     }
 
     for(int i = 0; i < spawned; i++) {

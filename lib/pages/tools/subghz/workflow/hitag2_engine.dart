@@ -3,6 +3,7 @@ import 'dart:ffi';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../mifare/mifare_native.dart' show openNativeLibrary;
 
@@ -29,12 +30,39 @@ class Hitag2Request {
 }
 
 class Hitag2Result {
-  const Hitag2Result.found(int this.key);
-  const Hitag2Result.notFound() : key = null;
+  const Hitag2Result.found(int this.key, {this.diag = 0});
+  const Hitag2Result.notFound({this.diag = 0}) : key = null;
 
   final int? key;
 
+  /// OR of `HITAG2HELL_DIAG_*` bits from the native engine — which path ran.
+  /// See [Hitag2Diag].
+  final int diag;
+
   bool get found => key != null;
+}
+
+abstract final class Hitag2Diag {
+  static const int gpuInitOk = 0x01;
+  static const int gpuFault = 0x02;
+  static const int cpuFallback = 0x04;
+  static const int found = 0x08;
+  static const int cancelled = 0x10;
+
+  /// A short human-readable trail for the status line, e.g. "GPU→CPU, found".
+  static String describe(int diag) {
+    final path = StringBuffer();
+    if (diag & gpuInitOk != 0) {
+      path.write(diag & gpuFault != 0 ? 'GPU stalled→CPU' : 'GPU');
+    } else if (diag & cpuFallback != 0) {
+      path.write('CPU');
+    } else {
+      path.write('—');
+    }
+    if (diag & found != 0) path.write(', found');
+    if (diag & cancelled != 0) path.write(', cancelled');
+    return path.toString();
+  }
 }
 
 class Hitag2Progress {
@@ -46,12 +74,21 @@ class Hitag2Progress {
 class Hitag2RecoverHandle {
   Hitag2RecoverHandle._(this._result, this._progress, this._cancel);
 
+  @visibleForTesting
+  Hitag2RecoverHandle.forTest({
+    required Future<Hitag2Result> result,
+    required Stream<Hitag2Progress> progress,
+    required void Function() cancel,
+  }) : _result = result,
+       _progress = progress,
+       _cancel = cancel;
+
   final Future<Hitag2Result> _result;
-  final StreamController<Hitag2Progress> _progress;
+  final Stream<Hitag2Progress> _progress;
   final void Function() _cancel;
 
   Future<Hitag2Result> get result => _result;
-  Stream<Hitag2Progress> get progress => _progress.stream;
+  Stream<Hitag2Progress> get progress => _progress;
   void cancel() => _cancel();
 }
 
@@ -68,6 +105,7 @@ typedef _Native = Int32 Function(
   Pointer<Int32> found,
   Pointer<Uint64> progressOut,
   Pointer<Int32> cancel,
+  Pointer<Int32> diag,
 );
 typedef _Dart = int Function(
   int hop,
@@ -82,6 +120,7 @@ typedef _Dart = int Function(
   Pointer<Int32> found,
   Pointer<Uint64> progressOut,
   Pointer<Int32> cancel,
+  Pointer<Int32> diag,
 );
 
 class DoctorHitag2Engine {
@@ -126,7 +165,7 @@ class DoctorHitag2Engine {
       if (!progressController.isClosed) progressController.close();
     });
 
-    return Hitag2RecoverHandle._(result, progressController, () {
+    return Hitag2RecoverHandle._(result, progressController.stream, () {
       if (closed) return;
       cancel.value = 1;
     });
@@ -158,6 +197,7 @@ class DoctorHitag2Engine {
     final progressOut = Pointer<Uint64>.fromAddress(p.progressAddress);
     final outKey = calloc<Uint64>();
     final found = calloc<Int32>();
+    final diag = calloc<Int32>();
     try {
       final rc = run(
         p.hop,
@@ -172,14 +212,16 @@ class DoctorHitag2Engine {
         found,
         progressOut,
         cancel,
+        diag,
       );
       if (rc == 1 && found.value != 0) {
-        return Hitag2Result.found(outKey.value);
+        return Hitag2Result.found(outKey.value, diag: diag.value);
       }
-      return const Hitag2Result.notFound();
+      return Hitag2Result.notFound(diag: diag.value);
     } finally {
       calloc.free(outKey);
       calloc.free(found);
+      calloc.free(diag);
     }
   }
 }

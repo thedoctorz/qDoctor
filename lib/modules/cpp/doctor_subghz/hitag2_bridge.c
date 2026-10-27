@@ -63,12 +63,13 @@ static void doctor_hitag2_progress(uint32_t done, uint32_t total, void* ctx) {
 #endif
 
 // rc == 1 => found (out_key = 48-bit key). progress_out: shared (pct<<56)|done
-// cell. cancel: shared abort flag. Matches iOS recoverSync's rc contract.
+// cell. cancel: shared abort flag.
 DOCTOR_EXPORT int doctor_hitag2hell_recover(
     uint32_t hop, uint32_t uid, uint32_t cnt, uint8_t btn,
     uint32_t hop2, uint32_t cnt2, uint8_t btn2, int32_t has_second,
     uint64_t* out_key, int32_t* found,
-    uint64_t* progress_out, volatile int32_t* cancel) {
+    uint64_t* progress_out, volatile int32_t* cancel, int32_t* diag) {
+    int diag_bits = 0;
     Hitag2HellRequest req;
     memset(&req, 0, sizeof(req));
     req.hop = hop;
@@ -89,6 +90,7 @@ DOCTOR_EXPORT int doctor_hitag2hell_recover(
     int rc;
 #ifdef __APPLE__
     if (hitag2hell_metal_available()) {
+        diag_bits |= HITAG2HELL_DIAG_GPU_INIT_OK;
         Hitag2HellMetalOptions opts;
         memset(&opts, 0, sizeof(opts));
         opts.shader_source = HITAG2HELL_METAL_SHADER;
@@ -99,6 +101,7 @@ DOCTOR_EXPORT int doctor_hitag2hell_recover(
         opts.cpu_threads = 0;
         rc = hitag2hell_recover_metal(&req, &out, &opts);
     } else {
+        diag_bits |= HITAG2HELL_DIAG_CPU_FALLBACK;
         rc = hitag2hell_recover_cpu_ex(&req, &out, cancel, progress_out);
     }
 #elif defined(__ANDROID__) || defined(_WIN32)
@@ -109,19 +112,23 @@ DOCTOR_EXPORT int doctor_hitag2hell_recover(
         opts.ctx = progress_out;
         opts.cancel = (volatile int*)cancel;
         opts.cpu_threads = 0;
+        opts.diag = &diag_bits;
         rc = hitag2hell_recover_vulkan(&req, &out, &opts);
         // recover_vulkan returns -1 for a cancel (cancel flag set) but also when
-        // there's no usable Vulkan GPU / it faulted before finding a key (flag
-        // clear) -> fall back to the CPU oracle in that case.
         if (rc == -1 && !(cancel && *cancel)) {
+            diag_bits |= HITAG2HELL_DIAG_CPU_FALLBACK;
             rc = hitag2hell_recover_cpu_ex(&req, &out, cancel, progress_out);
         }
     }
 #else
+    diag_bits |= HITAG2HELL_DIAG_CPU_FALLBACK;
     rc = hitag2hell_recover_cpu_ex(&req, &out, cancel, progress_out);
 #endif
     doctor_engine_unlock();
 
+    if (rc == 1) diag_bits |= HITAG2HELL_DIAG_FOUND;
+    if (cancel && *cancel) diag_bits |= HITAG2HELL_DIAG_CANCELLED;
+    if (diag) *diag = diag_bits;
     if (found) *found = (rc == 1) ? 1 : 0;
     if (rc == 1 && out_key) *out_key = out.key;
     return rc;

@@ -4255,6 +4255,14 @@
   "@remoteControlTitle": {
     "description": "Title of the screen that mirrors the Flipper screen."
   },
+  "remoteKeyboardHint": "Печатайте здесь, чтобы ввести текст на Flipper",
+  "@remoteKeyboardHint": {
+    "description": "Label of the Remote Control field that forwards the phone keyboard to a text input open on the Flipper."
+  },
+  "remoteKeyboardHide": "Скрыть клавиатуру",
+  "@remoteKeyboardHide": {
+    "description": "Tooltip of the button that closes the phone keyboard on the Remote Control screen."
+  },
   "wristRemoteMappingTitle": "Назначение Wrist Remote",
   "@wristRemoteMappingTitle": {
     "description": "Title and tooltip of the Wrist Remote media gesture mapping dialog."

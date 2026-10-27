@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../../../services/localization/l10n.dart';
 import 'keyboard_board.dart';
 
 class PhoneKeyboardField extends StatefulWidget {
@@ -10,12 +11,15 @@ class PhoneKeyboardField extends StatefulWidget {
     required this.onInsert,
     required this.onBackspace,
     required this.onSubmit,
+    this.autofocus = true,
   });
 
   final RemoteTextKind kind;
   final void Function(String text) onInsert;
   final void Function(int count) onBackspace;
   final VoidCallback onSubmit;
+
+  final bool autofocus;
 
   @override
   State<PhoneKeyboardField> createState() => _PhoneKeyboardFieldState();
@@ -33,9 +37,18 @@ class _PhoneKeyboardFieldState extends State<PhoneKeyboardField> {
   void initState() {
     super.initState();
     _controller.addListener(_onChanged);
+    _focus.addListener(_onFocusChanged);
+    if (widget.autofocus) _requestFocusSoon();
+  }
+
+  void _requestFocusSoon() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focus.requestFocus();
     });
+  }
+
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -43,15 +56,16 @@ class _PhoneKeyboardFieldState extends State<PhoneKeyboardField> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.kind != widget.kind) {
       _reset();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _focus.requestFocus();
-      });
+      if (widget.autofocus) _requestFocusSoon();
+    } else if (widget.autofocus && !oldWidget.autofocus) {
+      _requestFocusSoon();
     }
   }
 
   @override
   void dispose() {
     _controller.removeListener(_onChanged);
+    _focus.removeListener(_onFocusChanged);
     _controller.dispose();
     _focus.dispose();
     super.dispose();
@@ -110,7 +124,7 @@ class _PhoneKeyboardFieldState extends State<PhoneKeyboardField> {
     return TextField(
       controller: _controller,
       focusNode: _focus,
-      autofocus: true,
+      autofocus: widget.autofocus,
       keyboardType: number
           ? const TextInputType.numberWithOptions(signed: true)
           : TextInputType.text,
@@ -122,9 +136,22 @@ class _PhoneKeyboardFieldState extends State<PhoneKeyboardField> {
         if (number) FilteringTextInputFormatter.allow(RegExp(r'[0-9\-\u200b]')),
       ],
       onSubmitted: (_) => widget.onSubmit(),
-      decoration: const InputDecoration(
+      decoration: InputDecoration(
         isDense: true,
-        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
+        prefixIcon: const Icon(Icons.keyboard_outlined),
+        labelText: context.l10n.remoteKeyboardHint,
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        suffixIcon: _focus.hasFocus
+            ? IconButton(
+                tooltip: context.l10n.remoteKeyboardHide,
+                icon: const Icon(Icons.keyboard_hide_outlined),
+                onPressed: _focus.unfocus,
+              )
+            : null,
       ),
     );
   }
