@@ -11,7 +11,7 @@ publish_to: 'none'
 # The number after + is what the release job derives from 0.17.0. It is
 # already written here so that job finds pubspec current and does not push
 # a second commit after publishing.
-version: 0.17.0+17000
+version: 0.17.1+17001
 
 environment:
   # What this actually builds on, rather than a wider window.
